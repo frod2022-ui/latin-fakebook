@@ -1,0 +1,16 @@
+{
+  "name": "Latin Fake Book – Play-Along",
+  "short_name": "Fake Book",
+  "description": "Latin lead sheets and chord charts with a piano-and-bass band (bossa, salsa, bolero, tango and more). Melody on/off. Works offline.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f2f2f7",
+  "theme_color": "#c2381e",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

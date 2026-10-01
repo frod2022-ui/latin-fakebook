@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Latin Fake Book – Play-Along</title>
+<meta name="description" content="Latin play-along fake book: lead sheets and chord charts with piano, bass and percussion backing in bossa, salsa, bolero, tango and more. Works offline.">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Fake Book">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-in">
+    <div class="brand">
+      <img src="icon.svg" alt="">
+      <h1>Latin Fake Book<small>Play-along lead sheets</small></h1>
+    </div>
+    <button class="pill-btn" id="installBtn" hidden aria-label="Install app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M5 21h14"/></svg><span class="lbl">Install</span></button>
+    <button class="pill-btn" id="addBtn" title="Type in a new song"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="lbl">Add song</span></button>
+    <button class="pill-btn solid" id="importBtn" title="Open a song file (ABC, chord chart, MusicXML, MIDI or a backup)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9m0 0-4.5 4.5M12 9l4.5 4.5M5 3h14"/></svg><span class="lbl">Import</span></button>
+    <input type="file" id="fileInput" accept=".abc,.txt,.mid,.midi,.xml,.musicxml,.mxl,.json,audio/midi,application/xml,text/xml,application/json,text/plain" multiple hidden>
+  </div>
+</header>
+
+<div class="loadbar" id="loadBar" role="status" aria-live="polite"><span id="loadTxt">Getting the instruments ready…</span><b><i id="loadFill"></i></b></div>
+<div class="scrim" id="scrim"></div>
+<div class="wrap">
+  <nav class="card library" id="library" aria-label="Song library">
+    <div class="lib-close"><h2>Songs</h2><button class="pill-btn" id="libClose">Done</button></div>
+    <label class="sr" for="libSearch">Search songs</label>
+    <input class="lib-search" id="libSearch" type="search" placeholder="Search songs or styles" autocomplete="off">
+    <div id="libList"></div>
+  </nav>
+
+  <main class="main">
+    <section class="card" aria-live="polite">
+      <div class="song-head">
+        <div style="min-width:0;flex:1">
+          <h2 id="songTitle">Loading…</h2>
+          <p class="song-sub" id="songSub"></p>
+          <p class="song-credit" id="songCredit"></p>
+        </div>
+        <button class="pill-btn choose-btn" id="chooseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Songs</button>
+      </div>
+      <div class="meta-chips" id="metaChips"></div>
+      <p class="style-lbl">Rhythm style</p>
+      <div class="style-row" id="styleRow" role="group" aria-label="Rhythm style"></div>
+    </section>
+
+    <section class="card staff-card" aria-label="Music">
+      <div class="staff-top">
+        <div class="seg view-seg" id="viewSeg" role="group" aria-label="View">
+          <button data-v="lead" aria-pressed="true">Lead sheet</button><button data-v="chart" aria-pressed="false">Chord chart</button>
+        </div>
+        <span id="keyInfo"></span>
+      </div>
+      <div id="staff"></div>
+      <div id="chartView" hidden>
+        <div class="grid-tools">
+          <span class="hint" id="rangeHint">Tap a bar to play from there.</span>
+          <button class="pill-btn" id="rangeBtn">Loop some bars</button>
+          <button class="pill-btn" id="rangeClear" hidden>Whole song</button>
+        </div>
+        <div class="pickup-note" id="pickupNote" hidden></div>
+        <div class="grid" id="grid"></div>
+      </div>
+    </section>
+
+    <section class="card mixer" aria-label="Band and mixer">
+      <h2 style="margin:0 0 4px;font-size:22px">The band</h2>
+      <p class="source" style="margin:0 0 10px">Switch players on or off and set their volume.</p>
+      <div class="mix-presets">
+        <button class="pill-btn" id="presetPB">Piano + bass</button>
+        <button class="pill-btn" id="presetFull">Full band</button>
+        <button class="pill-btn" id="presetReset">Reset volumes</button>
+      </div>
+      <div id="mixRows"></div>
+    </section>
+
+    <details class="card" id="aboutBox">
+      <summary><span><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r=".7" fill="currentColor"/></svg></span>About this song</span></summary>
+      <div class="dbody"><p id="aboutText"></p><div class="row" id="songActions"></div></div>
+    </details>
+
+    <details class="card help" id="creditsBox">
+      <summary><span><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg></span>Sound credits &amp; licenses</span></summary>
+      <div class="dbody">
+        <p>The band plays real recorded instruments, bundled with the app so it works offline. Thank you to the people who shared them:</p>
+        <table>
+          <tr><td><b>Piano</b></td><td><b>Salamander Grand Piano V3</b> (Yamaha C5) by Alexander Holm — <a href="https://creativecommons.org/licenses/by/3.0/" rel="noopener">CC-BY 3.0</a>. Three velocity layers, sampled every minor third; converted to mono MP3 and shortened.</td></tr>
+          <tr><td><b>Bass, nylon guitar, vibraphone</b></td><td><b>FluidR3 GM</b> SoundFont by Frank Wen (MIT license), rendered to MP3 by Benjamin Gleitzman's <i>midi-js-soundfonts</i> (MIT license).</td></tr>
+          <tr><td><b>Flute &amp; percussion</b></td><td><b>VSCO 2 Community Edition</b> by Versilian Studios — <a href="https://creativecommons.org/publicdomain/zero/1.0/" rel="noopener">CC0 (public domain)</a>: flute with vibrato, claves, congas, quinto, tumba, cowbell, güiro, bass drum and snare (taps and snares-off hits used for timbales). Bongo sounds are re-pitched quinto/conga hits.</td></tr>
+          <tr><td><b>Shaker, count-in click, reverb</b></td><td>Made by the app itself.</td></tr>
+        </table>
+        <p>Full license texts are in the <code>samples/CREDITS.txt</code> file that comes with the app. Song sources are listed under “About this song”.</p>
+      </div>
+    </details>
+
+    <details class="card help">
+      <summary><span><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5V14"/><circle cx="12" cy="17.3" r=".6" fill="currentColor"/></svg></span>How to add your own songs</span></summary>
+      <div class="dbody">
+        <h3>Typing a chord chart</h3>
+        <p>Press <b>Add song</b>. Type the chords bar by bar between bar lines:</p>
+        <p><code>| Am7 | D7 | Gmaj7 | % |</code></p>
+        <table>
+          <tr><td><code>%</code></td><td>Play the bar before again</td></tr>
+          <tr><td><code>| C  G7 |</code></td><td>Two chords share the bar (two beats each)</td></tr>
+          <tr><td><code>| C / F G |</code></td><td>One chord per beat; <code>/</code> keeps the chord going</td></tr>
+          <tr><td><code>|: … :|</code></td><td>Repeat a section. Endings: <code>|1 … :|2 … |</code></td></tr>
+          <tr><td><code>A: | … |</code></td><td>A section label at the start of a line</td></tr>
+          <tr><td>Chords</td><td><code>C Cm C7 Cmaj7 Cm7 Cm7b5 Cdim7 C7b9 C7#11 C9 C13 Csus4 C6/9 C/E</code></td></tr>
+        </table>
+        <h3>Adding a melody (optional)</h3>
+        <p>The melody is typed in <b>ABC</b>, with letters for notes: <code>C D E F G A B</code> from middle C up, <code>c d e</code> an octave higher, <code>z</code> for a rest. A number after a note makes it longer (<code>C2</code>), <code>/</code> shorter (<code>C/</code>). Start with lines such as <code>M:4/4</code>, <code>L:1/8</code> and <code>K:G</code>. Chords can go in quotes right in the melody: <code>"Am7"A2 c2 "D7"d4</code> — then you don't need a separate chord chart.</p>
+        <h3>Opening files</h3>
+        <p><b>Import</b> opens ABC files (<code>.abc</code>, with chords in quotes), chord charts (<code>.txt</code>), MusicXML (<code>.xml</code>, <code>.musicxml</code>, <code>.mxl</code> – chord symbols are read too) and MIDI (<code>.mid</code> – chords are guessed from the accompaniment).</p>
+        <h3>Your songs stay on this device</h3>
+        <p>Songs you add or import are saved only inside this browser on this device. Nothing is uploaded anywhere. Use <b>Back up my songs</b> in the song list to save a copy as a file, and <b>Import</b> that file to bring them back or move them to another device.</p>
+      </div>
+    </details>
+  </main>
+</div>
+
+<div class="transport" id="transport">
+  <div class="tr-in">
+    <div class="progress" id="progress" title="Position in the song"><i id="progressBar"></i></div>
+    <div class="tr-main">
+      <button class="round" id="stopBtn" aria-label="Stop and go back to the start" title="Stop"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg></button>
+      <button class="play" id="playBtn" aria-label="Play"><svg id="playIco" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg></button>
+      <button class="round" id="loopBtn" aria-pressed="false" aria-label="Repeat" title="Repeat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12"/><path d="M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/></svg></button>
+      <button class="melbtn" id="melBtn" aria-pressed="true" title="Turn the melody on or off (the band keeps playing)"><span class="dot"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 17.5V6.2l10-2.2v11.3"/><circle cx="6.5" cy="17.5" r="2.8"/><circle cx="16.5" cy="15.3" r="2.8"/><path d="M9 6.2 19 4v2.6L9 8.8z"/></svg></span><span class="mt"><small>Melody</small><span id="melLbl">ON</span></span></button>
+      <button class="round more" id="moreBtn" aria-expanded="false" aria-label="Show speed, key and more" title="More controls"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg></button>
+      <div class="now" id="nowPlaying"><b id="nowTitle"></b><span id="nowState">Ready</span></div>
+    </div>
+    <div class="tr-ctrls">
+      <div class="ctrl">
+        <div class="cap"><span>Speed</span><output id="tempoOut"></output></div>
+        <div class="stepper"><button id="tempoDown" aria-label="Slower">−</button><input type="range" id="tempo" min="40" max="240" step="1" value="100" aria-label="Speed in beats per minute" style="flex:1;min-width:0"><button id="tempoUp" aria-label="Faster">+</button></div>
+      </div>
+      <div class="ctrl">
+        <div class="cap"><span>Key</span><output id="transOut">As written</output></div>
+        <div class="stepper"><button id="transDown" aria-label="Lower by a half step">−</button><div class="val" id="keyVal">C</div><button id="transUp" aria-label="Higher by a half step">+</button></div>
+      </div>
+      <div class="ctrl">
+        <div class="cap"><span>Count-in</span></div>
+        <div class="seg" id="countSeg" role="group" aria-label="Count-in"><button data-v="0">Off</button><button data-v="1">1 bar</button><button data-v="2">2 bars</button></div>
+      </div>
+      <div class="ctrl">
+        <div class="cap"><span>Read music for</span></div>
+        <div class="seg" id="instSeg" role="group" aria-label="Instrument transposition"><button data-v="C">C</button><button data-v="Bb">B♭</button><button data-v="Eb">E♭</button></div>
+      </div>
+      <div class="ctrl" id="claveCtrl">
+        <div class="cap"><span>Clave</span><output id="claveOut"></output></div>
+        <div class="seg" id="claveSeg" role="group" aria-label="Clave direction"><button data-v="3-2">3-2</button><button data-v="2-3">2-3</button></div>
+      </div>
+      <div class="ctrl tune-ctrl">
+        <div class="cap"><span>Tuning</span><output id="tuneOut">A = 440 Hz</output></div>
+        <div class="seg" id="tuneSeg" role="group" aria-label="Tuning reference"><button data-v="440">A = 440</button><button data-v="432">A = 432</button></div>
+        <div class="stepper" style="padding:0 14px;margin-top:8px"><input type="range" id="tune" min="415" max="466" step="1" value="440" aria-label="Fine tuning, A in hertz"></div>
+      </div>
+      <div class="ctrl">
+        <div class="cap"><span>Volume</span><output id="volOut"></output></div>
+        <div class="stepper" style="padding:0 14px"><input type="range" id="volume" min="0" max="100" step="1" value="85" aria-label="Volume"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="count-badge" id="countBadge"></div>
+<div class="toast" id="toast"></div>
+
+<dialog class="sheet" id="songDlg" aria-labelledby="dlgTitle">
+  <form method="dialog" id="songForm">
+    <div class="sheet-head"><h2 id="dlgTitle">Add a song</h2><div class="row" style="margin:0"><button class="pill-btn" value="cancel" id="dlgCancel" formnovalidate>Cancel</button><button class="pill-btn solid" id="dlgSave" value="save">Save</button></div></div>
+    <div class="sheet-body">
+      <div class="fld"><label for="fTitle">Title</label><input id="fTitle" required placeholder="My bossa practice" autocomplete="off"></div>
+      <div class="f2">
+        <div class="fld"><label for="fStyle">Style</label><select id="fStyle"></select></div>
+        <div class="fld"><label for="fTime">Time</label><select id="fTime"><option>4/4</option><option>3/4</option><option>2/4</option><option>6/8</option><option>2/2</option></select></div>
+        <div class="fld"><label for="fKey">Key (optional)</label><input id="fKey" placeholder="e.g. Am or Bb" autocomplete="off"></div>
+        <div class="fld"><label for="fTempo">Speed (beats/min)</label><input id="fTempo" type="number" min="40" max="260" placeholder="120" inputmode="numeric"></div>
+      </div>
+      <div class="fld"><label for="fChart">Chords, bar by bar</label><textarea id="fChart" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="| Am7 | D7 | Gmaj7 | % |"></textarea><div class="tip">Example: <code>| Dm7 | G7 | Cmaj7 | % |</code> · <code>%</code> repeats a bar · two chords in a bar share it · <code>|: … :|</code> repeats.</div></div>
+      <div class="fld"><label for="fAbc">Melody in ABC (optional)</label><textarea id="fAbc" class="abc" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="X:1&#10;M:4/4&#10;L:1/8&#10;K:C&#10;E2 G2 c4 | B2 A2 G4 |"></textarea><div class="tip">If the melody has chords in quotes (like <code>"Am7"A2</code>) you can leave the chord box empty.</div></div>
+      <div class="msg" id="dlgMsg" role="status"></div>
+      <p class="privacy">🔒 Saved only on this device. Nothing is uploaded.</p>
+    </div>
+  </form>
+</dialog>
+
+<script src="core.js"></script>
+<script src="chords.js"></script>
+<script src="engine.js"></script>
+<script src="audio.js"></script>
+<script src="staff.js"></script>
+<script src="songs.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
