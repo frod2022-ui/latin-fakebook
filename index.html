@@ -25,7 +25,9 @@
     </div>
     <button class="pill-btn" id="installBtn" hidden aria-label="Install app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M5 21h14"/></svg><span class="lbl">Install</span></button>
     <button class="pill-btn" id="addBtn" title="Type in a new song"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="lbl">Add song</span></button>
-    <button class="pill-btn solid" id="importBtn" title="Open a song file (ABC, chord chart, MusicXML, MIDI or a backup)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9m0 0-4.5 4.5M12 9l4.5 4.5M5 3h14"/></svg><span class="lbl">Import</span></button>
+    <button class="pill-btn solid" id="importBtn" title="Open song files: ABC, chord chart, MusicXML, MIDI, Band-in-a-Box or a backup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9m0 0-4.5 4.5M12 9l4.5 4.5M5 3h14"/></svg><span class="lbl">Import</span></button>
+    <input type="file" id="bibInput" multiple hidden>
+    <input type="file" id="bibDirInput" webkitdirectory multiple hidden>
     <input type="file" id="fileInput" accept=".abc,.txt,.mid,.midi,.xml,.musicxml,.mxl,.json,audio/midi,application/xml,text/xml,application/json,text/plain" multiple hidden>
   </div>
 </header>
@@ -195,12 +197,26 @@
   </form>
 </dialog>
 
+<dialog class="sheet small" id="importDlg" aria-labelledby="impTitle">
+  <form method="dialog">
+    <div class="sheet-head"><h2 id="impTitle">Import</h2><button class="pill-btn" value="cancel">Cancel</button></div>
+    <div class="sheet-body">
+      <button type="button" class="imp-opt" id="impSong"><b>Song files</b><small>ABC, chord chart (.txt), MusicXML, MIDI, or a Latin Fake Book backup (.json)</small></button>
+      <button type="button" class="imp-opt" id="impBib"><b>Band-in-a-Box files</b><small>Songs (.SGU, .MGU) and their styles (.STY). Pick as many as you like.</small></button>
+      <button type="button" class="imp-opt" id="impBibDir"><b>Band-in-a-Box folder</b><small>Choose a whole folder; every song and style in it is found, sub-folders too.</small></button>
+      <p class="privacy">🔒 Files are read on this device and kept only here. Nothing is uploaded.</p>
+    </div>
+  </form>
+</dialog>
+
 <script src="core.js"></script>
 <script src="chords.js"></script>
 <script src="engine.js"></script>
 <script src="audio.js"></script>
 <script src="staff.js"></script>
 <script src="songs.js"></script>
+<script src="biab.js"></script>
+<script src="biabsty.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

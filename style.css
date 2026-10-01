@@ -303,3 +303,15 @@ dialog.sheet::backdrop{background:rgba(0,0,0,.4)}
 @media (max-width:899.98px){.transport.expanded .tr-ctrls{max-height:min(58vh,520px);overflow-y:auto;overscroll-behavior:contain;padding-bottom:4px}.tune-ctrl{grid-column:1/-1}}
 @media (max-width:560px){.brand small{display:none}.brand h1{font-size:19px}}
 @media (max-width:430px){.tr-main{gap:7px}.round{width:46px;height:46px}.play{width:64px;height:64px}.melbtn{padding:0 12px 0 7px;gap:7px;min-height:54px;font-size:17px}.melbtn .dot{width:26px;height:26px}.melbtn small{display:block;font-size:11px}}
+
+/* import chooser + Band-in-a-Box library section */
+dialog.sheet.small{max-width:520px;height:auto}
+.imp-opt{display:block;width:100%;text-align:left;border:1.5px solid var(--line);background:var(--card2);color:var(--text);border-radius:14px;padding:14px 16px;min-height:64px;cursor:pointer}
+.imp-opt b{display:block;font-size:18px}
+.imp-opt small{display:block;font-size:14.5px;color:var(--muted);margin-top:3px}
+.imp-opt:hover,.imp-opt:focus-visible{border-color:var(--accent-2);outline:none}
+.lib-sec-btn{display:flex;width:calc(100% - 12px);align-items:center;justify-content:space-between;background:none;border:0;padding:0;cursor:pointer;color:inherit;font:inherit;text-align:left}
+.lib-sec-btn .chev{transition:transform .2s;font-size:16px}
+.lib-sec-btn[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.lib-sec .lib-sec-btn > span:first-child,.lib-sec .lib-sec-btn .chev{background:none;padding:0;margin:0;font-size:inherit;letter-spacing:inherit}
+.lib-sec .lib-sec-btn .chev{font-size:20px;line-height:1}

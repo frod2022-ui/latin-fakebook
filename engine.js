@@ -99,7 +99,10 @@
 
   /* which parts a style actually plays (others are greyed out in the mixer) */
   function styleParts(sid, triple) {
-    var st = STYLES[sid] || STYLES.bossa, p = (triple ? st.p3 || VALS3 : st.p4 || st.p3), out = { melody: 1, piano: 1, bass: 1 };
+    var st = STYLES[sid] || STYLES.bossa;
+    // a Band-in-a-Box style: its own decoded drums, or the built-in percussion of the closest app style
+    if (st.bib) { var o = st.drums ? { melody: 1, piano: 1, bass: 1 } : styleParts(st.fallback, triple); Object.keys(st.bibUsed || {}).forEach(function (k) { if (st.bibUsed[k]) o[k] = 1; }); return o; }
+    var p = (triple ? st.p3 || VALS3 : st.p4 || st.p3), out = { melody: 1, piano: 1, bass: 1 };
     Object.keys((p && p.perc) || {}).forEach(function (k) { out[k] = 1; });
     return out;
   }

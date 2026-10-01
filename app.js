@@ -32,37 +32,48 @@
   /* ---------- library ---------- */
   var builtIn = (window.LF_SONGS || []).slice();
   var mySongs = LS.get('mySongs', []);
-  var SECTION_ORDER = ['Mexico', 'Cuba & the Caribbean', 'Argentina & Uruguay', 'Spain', 'Practice progressions', 'My Songs'];
-  function allSongs() { return builtIn.concat(mySongs.map(function (m) { return Object.assign({}, m, { section: 'My Songs', mine: true }); })); }
+  var SECTION_ORDER = ['Mexico', 'Cuba & the Caribbean', 'Argentina & Uruguay', 'Spain', 'Practice progressions', 'My Songs', 'My Band-in-a-Box'];
+  var BIB_SEC = 'My Band-in-a-Box';
+  function allSongs() { return builtIn.concat(mySongs.map(function (m) { return Object.assign({}, m, { section: m.bib ? BIB_SEC : 'My Songs', mine: true }); })); }
   function findSong(id) { var a = allSongs(); for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i]; return null; }
   function styleName(id) { var s = E.STYLES[id]; return s ? s.short : id; }
   function renderLibrary() {
     var q = ($('libSearch').value || '').toLowerCase().trim(), list = $('libList'), html = '';
     var songs = allSongs(), groups = {};
     songs.forEach(function (s) {
-      var hay = (s.title + ' ' + (s.sub || '') + ' ' + (s.section || '') + ' ' + styleName(E.styleId(s.style) || '') + ' ' + (s.credit || '')).toLowerCase();
+      var hay = (s.title + ' ' + (s.sub || '') + ' ' + (s.section || '') + ' ' + styleName(E.styleId(s.style) || '') + ' ' + (s.credit || '') + (s.bib ? ' band-in-a-box biab ' + s.bib.style + ' ' + (s.bib.file || '') : '')).toLowerCase();
       if (q && hay.indexOf(q) < 0) return;
       (groups[s.section || 'Other'] = groups[s.section || 'Other'] || []).push(s);
     });
     var secs = Object.keys(groups).sort(function (a, b) { var ia = SECTION_ORDER.indexOf(a), ib = SECTION_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
-    if (!secs.indexOf || secs.indexOf('My Songs') < 0) secs.push('My Songs');
+    if (secs.indexOf('My Songs') < 0) secs.splice(secs.indexOf(BIB_SEC) < 0 ? secs.length : secs.indexOf(BIB_SEC), 0, 'My Songs');
     secs.forEach(function (sec) {
       var arr = groups[sec] || [];
+      if (sec === BIB_SEC) {
+        // a big collection: folded away unless searching or a song from it is open
+        var fold = LS.get('bibOpen', null), open = !!q || (fold === null ? !!(S.song && S.song.bib) : fold);
+        html += '<h3 class="lib-sec"><button class="lib-sec-btn" data-act="bibfold" aria-expanded="' + open + '"><span>' + esc(sec) + ' <span>' + arr.length + '</span></span><span class="chev" aria-hidden="true">›</span></button></h3>';
+        if (!open) return;
+        html += '<p class="privacy">🔒 Your Band-in-a-Box songs and styles are kept only on this device. Nothing is uploaded.</p>';
+        html += '<div class="lib-actions"><button class="pill-btn" data-act="bib">Import Band-in-a-Box</button><button class="pill-btn" data-act="backup">Back up my songs</button></div>';
+      } else
       html += '<h3 class="lib-sec">' + esc(sec) + (arr.length ? ' <span>' + arr.length + '</span>' : '') + '</h3>';
       if (sec === 'My Songs') {
         html += '<p class="privacy">🔒 Your songs are kept only on this device. Nothing is uploaded.</p>';
         html += '<div class="lib-actions"><button class="pill-btn" data-act="add">＋ Add song</button><button class="pill-btn" data-act="import">Import file</button><button class="pill-btn" data-act="backup"' + (mySongs.length ? '' : ' disabled') + '>Back up my songs</button></div>';
+        arr = arr.filter(function (x) { return !x.bib; });
         if (!arr.length) html += '<p class="lib-empty">' + (q ? 'No matches.' : 'Songs you add or import will appear here.') + '</p>';
       }
       arr.forEach(function (s) {
         var sid = E.styleId(s.style) || 'bossa';
-        html += '<button class="lib-item" aria-current="' + (S.song && S.song.id === s.id) + '" data-id="' + esc(s.id) + '"><span class="num">' + esc(styleName(sid).slice(0, 2)) + '</span><span style="min-width:0"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc([styleName(sid), s.sub].filter(Boolean).join(' · ')) + '</span></span></button>';
+        var sub = s.bib ? [bibNice(s.bib.style) + (bibHave(s) ? '' : ' → ' + styleName(sid)), s.key, s.meter !== '4/4' ? s.meter : ''] : [styleName(sid), s.sub];
+        html += '<button class="lib-item" aria-current="' + (S.song && S.song.id === s.id) + '" data-id="' + esc(s.id) + '"><span class="num">' + esc(s.bib ? 'BB' : styleName(sid).slice(0, 2)) + '</span><span style="min-width:0"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(sub.filter(Boolean).join(' · ')) + '</span></span></button>';
       });
     });
     list.innerHTML = html;
     forEach(list.querySelectorAll('.lib-item'), function (b) { b.onclick = function () { loadSong(b.dataset.id, true); closeLib(); }; });
     forEach(list.querySelectorAll('[data-act]'), function (b) {
-      b.onclick = function () { var a = b.dataset.act; if (a === 'add') { closeLib(); openDialog(null); } else if (a === 'import') $('fileInput').click(); else if (a === 'backup') backup(); };
+      b.onclick = function () { var a = b.dataset.act; if (a === 'add') { closeLib(); openDialog(null); } else if (a === 'import') openImport(); else if (a === 'bib') $('bibInput').click(); else if (a === 'backup') backup(); else if (a === 'bibfold') { LS.set('bibOpen', b.getAttribute('aria-expanded') !== 'true'); renderLibrary(); } };
     });
   }
   function openLib() { $('library').classList.add('open'); $('scrim').classList.add('show'); var on = $('libList').querySelector('[aria-current="true"]'); if (on) on.scrollIntoView({ block: 'center' }); }
@@ -83,7 +94,8 @@
     var base = E.buildSong(s);
     if (!base.nb) { toast('This song could not be read.'); return; }
     S.base = base;
-    var pr = songPrefs(s.id), defStyle = E.styleId(s.style) || (base.triple ? 'vals' : 'bossa');
+    var pr = songPrefs(s.id), bid = bibStyleId(s), defStyle = (bid && E.STYLES[bid]) || E.styleId(s.style) || (base.triple ? 'vals' : 'bossa');
+    if (bid && E.STYLES[bid]) defStyle = bid;
     S.style = E.styleId(pr.style) || defStyle;
     if (base.triple && !E.STYLES[S.style].p3) S.style = 'vals';
     S.tempo = pr.tempo || s.tempo || E.STYLES[S.style].tempo;
@@ -94,6 +106,12 @@
     renderHeader(); renderStyles(); renderMixer(); renderView(); updateControls(); renderLibrary();
     if (base.errors.length && user) toast('Some of this song could not be read: ' + base.errors[0].message);
     if (user) window.scrollTo({ top: 0, behavior: 'smooth' });
+    // a Band-in-a-Box song: load its own style from this device's storage and switch to it
+    if (bid && !E.STYLES[bid]) ensureBib(s).then(function (id) {
+      if (!id || S.song !== s) return;
+      renderStyles(); if (!pr.style || pr.style === id) setStyle(id);
+      renderHeader(); renderLibrary();
+    });
   }
   /* audio timeline in concert pitch with transposition applied */
   function rebuild() {
@@ -130,6 +148,7 @@
     chips.push('<span class="mchip"><b>' + b.nb + '</b> bars</span>');
     chips.push('<span class="mchip">' + (b.melody ? 'Melody + chords' : 'Chords only') + '</span>');
     if (s.mine) chips.push('<span class="mchip mine">🔒 My song</span>');
+    if (s.bib) chips.push('<span class="mchip">Band-in-a-Box · ' + esc(bibNice(s.bib.style)) + (bibHave(s) ? '' : ' (style not imported)') + '</span>');
     $('metaChips').innerHTML = chips.join('');
     var about = '';
     if (s.about) about += '<p>' + esc(s.about) + '</p>';
@@ -149,7 +168,8 @@
     };
   }
   function renderStyles() {
-    var row = $('styleRow'), triple = S.base.triple, html = '';
+    var row = $('styleRow'), triple = S.base.triple, html = '', bid = bibStyleId(S.song);
+    if (bid && E.STYLES[bid]) html += '<button class="chip" data-s="' + esc(bid) + '" aria-pressed="' + (bid === S.style) + '" title="' + esc(E.STYLES[bid].name) + '">' + esc(E.STYLES[bid].short) + '</button>';
     E.STYLE_ORDER.forEach(function (id) {
       var st = E.STYLES[id], ok = triple ? !!st.p3 : !!st.p4;
       if (!ok) return;
@@ -350,7 +370,8 @@
   function neededSets() {
     var n = ['piano', 'bass'];
     if (S.voice === 'flute') n.push('flute'); else if (S.voice === 'vibes') n.push('vibes');
-    if (S.comp === 'guitar') n.push('guitar');
+    var bs = E.STYLES[S.style] && E.STYLES[S.style].bib;
+    if (S.comp === 'guitar' || (bs && bs.parts.guitar && !bs.parts.piano)) n.push('guitar');
     if (S.base && percOn()) n.push('perc');
     return n;
   }
@@ -407,7 +428,12 @@
     if (k > endBar()) { if (S.loop) k = firstBar(); else { P.done = true; return; } }
     var seg = { kind: 'bar', bar: k, start: P.pbEnd, len: tl.barQ }; P.segs.push(seg);
     var ending = !S.loop && !S.range;
-    var evs = E.generateBar(tl, S.style, k, { clave: S.clave, ending: ending, state: P.gen });
+    var st = E.STYLES[S.style], evs;
+    if (st && st.bib) {
+      // the song's own Band-in-a-Box patterns, fitted to its chords; built-in percussion if its drums are not decoded
+      evs = BS.generateBar(tl, st.bib, k, { state: P.gen.bib || (P.gen.bib = {}), parts: S.song.bib && bibStyleId(S.song) === S.style ? S.song.bib.parts : null, ending: ending });
+      if (!st.drums) evs = evs.concat(E.generateBar(tl, st.fallback, k, { clave: S.clave, ending: ending, state: P.gen }).filter(function (e) { return e.part !== 'piano' && e.part !== 'bass'; }));
+    } else evs = E.generateBar(tl, S.style, k, { clave: S.clave, ending: ending, state: P.gen });
     evs.forEach(function (ev) { P.queue.push({ pb: seg.start + ev.t, kind: 'back', ev: ev }); });
     var b0 = tl.pickup + k * tl.barQ, b1 = b0 + tl.barQ;
     tl.events.forEach(function (e) {
@@ -435,7 +461,8 @@
     if (PERC_IDS.indexOf(ev.part) >= 0 && !partLevel(ev.part)) return; // muted percussion: nothing to play
     var dur = ev.dur * s;
     if (ev.part === 'piano') {
-      if (S.comp === 'guitar') A.guitar(ev.midi, t, dur, ev.vel, 'piano');
+      if (S.comp === 'guitar' || ev.instr === 'guitar') A.guitar(ev.midi, t, dur, ev.vel, 'piano');
+      else if (ev.raw) A.piano(ev.midi, t, dur, ev.vel, 'piano', { spread: 0 });
       else A.piano(ev.midi, t, dur, ev.vel, 'piano', { spread: ev.block ? 0.006 : 0.003 });
     } else if (ev.part === 'bass') A.bass(ev.midi[0], t, dur, ev.vel);
     else if (ev.sound) A.perc(ev.sound, ev.part, t, ev.vel);
@@ -584,6 +611,7 @@
     }
     delete msg.dataset.ok;
     if (!tl.hasChords && !tl.melody) { msg.className = 'msg show err'; msg.textContent = 'No chords were found. Use chord names like C, Am7, G7 between bar lines | … |'; return false; }
+    if (editing && editing.bib) { s.bib = editing.bib; s.section = editing.section; }
     if (editing) { var i = mySongs.findIndex(function (m) { return m.id === editing.id; }); mySongs[i] = s; } else mySongs.push(s);
     LS.set('mySongs', mySongs);
     var all = LS.get('prefs', {}) || {}; delete all[s.id]; LS.set('prefs', all);
@@ -612,8 +640,100 @@
     mySongs.forEach(function (s) { if (prefs[s.id]) my[s.id] = prefs[s.id]; });
     var data = { app: 'latin-fakebook', version: 1, saved: new Date().toISOString(), songs: mySongs, prefs: my };
     var d = new Date(), stamp = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
-    download('latin-fakebook-backup-' + stamp + '.json', JSON.stringify(data, null, 1), 'application/json');
-    toast('Backup saved: ' + mySongs.length + ' song' + (mySongs.length === 1 ? '' : 's'));
+    // Band-in-a-Box styles that the songs use go into the same file, so restoring it brings both back
+    var keys = {}; mySongs.forEach(function (m) { if (m.bib && m.bib.styleKey && bibKnown[m.bib.styleKey]) keys[m.bib.styleKey] = 1; });
+    return Promise.all(Object.keys(keys).map(function (k) { return bibGet(k).then(function (v) { if (v) { data.bibStyles = data.bibStyles || {}; data.bibStyles[k] = v; } }); })).catch(function () {}).then(function () {
+      download('latin-fakebook-backup-' + stamp + '.json', JSON.stringify(data), 'application/json');
+      var ns = Object.keys(data.bibStyles || {}).length;
+      toast('Backup saved: ' + mySongs.length + ' song' + (mySongs.length === 1 ? '' : 's') + (ns ? ' and ' + ns + ' Band-in-a-Box style' + (ns === 1 ? '' : 's') : ''));
+      return data;
+    });
+  }
+
+
+  /* =================== BAND-IN-A-BOX =================== */
+  // Songs (.SGU/.MGU) become normal "my songs"; styles (.STY) are turned into the app's own pattern JSON and kept in
+  // IndexedDB on this device (they are too big for localStorage). Nothing is sent anywhere.
+  var BI = window.LFBiab, BS = window.LFBiabSty, bibKnown = {}, bibCache = {}, bibReadyP = Promise.resolve();
+  var bibDB = null;
+  function bibOpen() {
+    if (!bibDB) bibDB = new Promise(function (res, rej) {
+      if (!window.indexedDB) return rej(new Error('This browser cannot store styles.'));
+      var r = indexedDB.open('lfb-bib', 1);
+      r.onupgradeneeded = function () { r.result.createObjectStore('styles'); };
+      r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); };
+    });
+    return bibDB;
+  }
+  function bibTx(mode, fn) {
+    return bibOpen().then(function (db) { return new Promise(function (res, rej) {
+      var t = db.transaction('styles', mode), req = fn(t.objectStore('styles'));
+      t.oncomplete = function () { res(req ? req.result : undefined); }; t.onerror = t.onabort = function () { rej(t.error || new Error('storage error')); };
+    }); });
+  }
+  function bibPut(map) { return bibTx('readwrite', function (st) { Object.keys(map).forEach(function (k) { st.put(map[k], k); bibKnown[k] = 1; bibCache[k] = map[k]; }); }); }
+  function bibGet(k) { return bibCache[k] ? Promise.resolve(bibCache[k]) : bibTx('readonly', function (st) { return st.get(k); }).then(function (v) { if (v) bibCache[k] = v; return v; }); }
+  function bibInit() { bibReadyP = bibTx('readonly', function (st) { return st.getAllKeys(); }).then(function (ks) { (ks || []).forEach(function (k) { bibKnown[k] = 1; }); }).catch(function () {}); return bibReadyP; }
+  function isBibFile(f) { return /\.(sgu|mgu|sg\d|mg\d|sty)$/i.test(f.name) && !/^\._/.test(f.name); }
+  function bibNice(st) { return String(st || '').replace(/\.sty$/i, '').toUpperCase(); } // as Band-in-a-Box shows it
+  function bibStyleId(s) { return s && s.bib && s.bib.styleKey ? 'bib:' + s.bib.styleKey : null; }
+  function bibHave(s) { return !!(s && s.bib && s.bib.styleKey && (bibKnown[s.bib.styleKey] || E.STYLES['bib:' + s.bib.styleKey])); }
+  function registerBib(key, sty, fb) {
+    var id = 'bib:' + key; if (E.STYLES[id]) return id;
+    fb = E.STYLES[fb] ? fb : (sty.meter === '3/4' ? 'vals' : 'bolero');
+    var f = E.STYLES[fb], drums = !!(sty.parts.drums && (sty.parts.drums.a.length || sty.parts.drums.b.length)), nm = bibNice(key);
+    E.STYLES[id] = Object.assign({}, f, {
+      name: 'Band-in-a-Box style ' + nm + (sty.desc ? ' (' + sty.desc.slice(0, 60) + ')' : '') + (drums ? '' : ' · drums: ' + f.short),
+      short: '★ ' + nm, tempo: sty.tempo > 30 && sty.tempo < 300 ? sty.tempo : f.tempo, bib: sty, fallback: fb, drums: drums,
+      bibUsed: BS.partsUsed(sty), clave: drums ? false : f.clave, p3: f.p3 || E.STYLES.vals.p3, p4: f.p4 || E.STYLES.bolero.p4
+    });
+    return id;
+  }
+  function ensureBib(s) {
+    var key = s.bib && s.bib.styleKey; if (!key) return Promise.resolve(null);
+    if (E.STYLES['bib:' + key]) return Promise.resolve('bib:' + key);
+    return bibReadyP.then(function () { return bibKnown[key] ? bibGet(key) : null; }).then(function (sty) { return sty && sty.parts ? registerBib(key, sty, E.styleId(s.style)) : null; }).catch(function () { return null; });
+  }
+  function openImport() { closeLib(); var d = $('importDlg'); if (d.showModal) d.showModal(); else $('fileInput').click(); }
+  function importBib(fileList) {
+    var files = Array.prototype.filter.call(fileList, isBibFile), sty = files.filter(function (f) { return /\.sty$/i.test(f.name); }), songs = files.filter(function (f) { return !/\.sty$/i.test(f.name); });
+    if (!files.length) { toast('No Band-in-a-Box songs (.SGU, .MGU) or styles (.STY) were found there.'); return Promise.resolve([]); }
+    var styles = {}, bad = [], added = [], i = 0, total = files.length;
+    var bar = $('loadBar'), fillEl = $('loadFill'), txt = $('loadTxt');
+    function progress() { i++; if (total > 20) { bar.classList.add('show'); fillEl.style.width = Math.round(i / total * 100) + '%'; txt.textContent = 'Reading Band-in-a-Box files… ' + i + ' of ' + total; } }
+    function each(list, fn) { // a few files at a time so the page stays responsive
+      var k = 0;
+      return new Promise(function (res) { (function next() { var chunk = list.slice(k, k + 12); k += 12; if (!chunk.length) return res(); Promise.all(chunk.map(function (f) { return readAsBuf(f).then(function (b) { fn(f, b); }).catch(function (e) { bad.push(f.name + ': ' + (e.message || e)); }).then(progress); })).then(function () { setTimeout(next, 0); }); })(); });
+    }
+    return bibReadyP.then(function () {
+      return each(sty, function (f, b) { var st = BS.parse(b, f.name); styles[BI.styleKey(f.name)] = st; });
+    }).then(function () { return Object.keys(styles).length ? bibPut(styles) : null; }).then(function () {
+      var have = mySongs.reduce(function (o, m) { o[m.id] = 1; return o; }, {});
+      return each(songs, function (f, b) {
+        var info = BI.parse(b, f.name), key = BI.styleKey(info.style), st = styles[key] || bibCache[key];
+        var s = BI.toSong(info, { path: f.webkitRelativePath || f.name, styleMeter: st && st.meterKnown && st.meter, styleDesc: st && st.desc, swing: st ? st.swing : /swing|shuf|jaz|blues|bop/i.test(info.style) });
+        var tl = E.buildSong(s); if (!tl.nb || !tl.hasChords) throw new Error('no chords were found');
+        if (have[s.id]) return; have[s.id] = 1;
+        s.source = 'Imported from your Band-in-a-Box file ' + (f.webkitRelativePath || f.name) + ' on ' + new Date().toLocaleDateString();
+        mySongs.push(s); added.push(s);
+      });
+    }).then(function () {
+      // a song whose style was not in this batch may still find it among styles imported earlier
+      var miss = added.filter(function (s) { return s.bib.styleKey && !styles[s.bib.styleKey] && !bibKnown[s.bib.styleKey]; }).length;
+      LS.set('mySongs', mySongs); bar.classList.remove('show');
+      var nSty = Object.keys(styles).length, msg = [];
+      if (added.length) msg.push('Added ' + added.length + ' Band-in-a-Box song' + (added.length === 1 ? '' : 's'));
+      if (nSty) msg.push((added.length ? '' : 'Saved ') + nSty + ' style' + (nSty === 1 ? '' : 's'));
+      if (!added.length && !nSty) msg.push(songs.length ? 'Those songs are already here' : 'Nothing new was added');
+      if (miss) msg.push(miss + (miss === 1 ? ' song uses' : ' songs use') + ' a style you have not imported yet, so a built-in style plays');
+      if (bad.length) msg.push(bad.length + ' file' + (bad.length === 1 ? '' : 's') + ' could not be read');
+      if (bad.length && window.console) console.warn('Band-in-a-Box files not read:', bad);
+      LS.set('bibOpen', true); renderLibrary();
+      if (added.length) { loadSong(added[0].id, true); closeLib(); }
+      else if (nSty && S.song && S.song.bib) loadSong(S.song.id);
+      toast(msg.join(' · ') + '.');
+      return { added: added, styles: nSty, failed: bad };
+    });
   }
 
   /* =================== IMPORT =================== */
@@ -670,6 +790,7 @@
             out.push(s);
           });
           LS.set('prefs', prefs); notes.push('backup');
+          if (d.bibStyles && typeof d.bibStyles === 'object') { var ok = {}; Object.keys(d.bibStyles).forEach(function (k) { var v = d.bibStyles[k]; if (v && v.parts) ok[k] = v; }); if (Object.keys(ok).length) return bibPut(ok).then(function () { notes.push('styles'); return out; }); }
           return out;
         }
         if (/<score-partwise|<score-timewise/.test(t)) return [songFromABC(C.musicXMLToABC(t), name)];
@@ -684,6 +805,7 @@
           var tl = E.buildSong(s);
           if (!tl.nb || (!tl.hasChords && !tl.melody)) throw new Error('no chords or notes were found');
           if (!s.tempo) s.tempo = E.STYLES[E.styleId(s.style) || 'bossa'].tempo;
+          if (s.bib) { var j = mySongs.findIndex(function (m) { return m.id === s.id; }); if (j >= 0) return; }
           if (!tl.hasChords) notes.push('nochords');
           mySongs.push(s); added.push(s);
         });
@@ -692,8 +814,9 @@
     return Promise.all(jobs).then(function () {
       LS.set('mySongs', mySongs); renderLibrary();
       if (added.length) {
-        loadSong(added[0].id, true); closeLib();
-        toast((added.length === 1 ? 'Added “' + added[0].title + '” to My Songs' : 'Added ' + added.length + ' songs to My Songs') + (notes.indexOf('nochords') >= 0 ? ' — no chord symbols found; use Edit to add chords.' : ''));
+        LS.set('song', added[0].id); loadSong(added[0].id, true); closeLib();
+        var nb = added.filter(function (x) { return x.bib; }).length;
+        toast((added.length === 1 ? 'Added “' + added[0].title + '” to ' + (nb ? BIB_SEC : 'My Songs') : 'Added ' + added.length + ' songs to ' + (nb === added.length ? BIB_SEC : 'My Songs')) + (notes.indexOf('styles') >= 0 ? ', with their Band-in-a-Box styles' : '') + (notes.indexOf('nochords') >= 0 ? ' — no chord symbols found; use Edit to add chords.' : ''));
       } else if (notes.indexOf('backup') >= 0) toast('Those songs are already here.');
       return added;
     });
@@ -733,17 +856,23 @@
     $('presetReset').onclick = function () { var d = defaultMix(); Object.keys(d).forEach(function (k) { mix[k].vol = d[k].vol; }); applyMix(); renderMixer(); toast('Volumes reset'); };
     $('progress').onclick = function (ev) { var r = this.getBoundingClientRect(), t = (ev.clientX - r.left) / r.width * S.tl.total; seekTo(Math.floor((t - S.tl.pickup) / S.tl.barQ)); };
     $('addBtn').onclick = function () { openDialog(null); };
-    $('importBtn').onclick = function () { $('fileInput').click(); };
+    $('importBtn').onclick = openImport;
+    $('impSong').onclick = function () { $('importDlg').close(); $('fileInput').click(); };
+    $('impBib').onclick = function () { $('importDlg').close(); $('bibInput').click(); };
+    $('impBibDir').onclick = function () { $('importDlg').close(); $('bibDirInput').click(); };
+    ['bibInput', 'bibDirInput'].forEach(function (id) { $(id).onchange = function () { if (this.files && this.files.length) importBib(this.files); this.value = ''; }; });
+    if (!('webkitdirectory' in document.createElement('input'))) $('impBibDir').hidden = true;
+    bibInit();
     $('fileInput').onchange = function () { if (this.files && this.files.length) importFiles(this.files); this.value = ''; };
     $('songForm').addEventListener('submit', function (e) { e.preventDefault(); saveDialog(); });
     $('dlgCancel').onclick = function (e) { e.preventDefault(); closeDialog(); };
     document.addEventListener('dragover', function (e) { e.preventDefault(); });
-    document.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files.length) importFiles(e.dataTransfer.files); });
+    document.addEventListener('drop', function (e) { e.preventDefault(); var f = e.dataTransfer.files; if (!f.length) return; if (Array.prototype.some.call(f, isBibFile)) importBib(f); else importFiles(f); });
     $('chooseBtn').onclick = openLib; $('libClose').onclick = closeLib; $('scrim').onclick = closeLib;
     $('libSearch').oninput = renderLibrary;
     document.addEventListener('keydown', function (e) {
       if (/^(TEXTAREA|INPUT|SELECT)$/.test(e.target.tagName) && e.target.type !== 'range') return;
-      if ($('songDlg').open) return;
+      if ($('songDlg').open || $('importDlg').open) return;
       if (e.code === 'Space') { e.preventDefault(); toggle(); }
       else if (e.key === 'm' || e.key === 'M') toggleMelody();
       else if (e.key === 'Escape') closeLib();
@@ -759,6 +888,6 @@
     loadSong(params.get('song') || LS.get('song', builtIn[0] && builtIn[0].id));
   }
   window.LFApp = { state: S, P: P, mix: mix, play: play, pause: pause, stop: stop, loadSong: loadSong, setStyle: setStyle, setTempo: setTempo, setTranspose: setTranspose, toggleMelody: toggleMelody,
-    importFiles: importFiles, loadSamples: loadSamples, neededSets: neededSets, partLevel: partLevel, audio: A, seekTo: seekTo, allSongs: allSongs };
+    importFiles: importFiles, importBib: importBib, backup: backup, bibReady: function () { return bibReadyP; }, loadSamples: loadSamples, neededSets: neededSets, partLevel: partLevel, audio: A, seekTo: seekTo, allSongs: allSongs };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

@@ -184,7 +184,7 @@
     var seq = []; // tokens: {t:'bar'|'rs'|'re'|'end'|'chords', ...}
     var label = null;
     lines.forEach(function (raw, ln) {
-      var line = raw.replace(/#.*$/, '').replace(/\/\/.*$/, '').trim();
+      var line = raw.replace(/(^|\s)#.*$/, '').replace(/(^|\s)\/\/.*$/, '').trim(); // comments start with # or // (a # right after a chord letter is a sharp)
       if (!line) return;
       var hm = line.match(/^(title|t|style|time|meter|m|key|k|tempo|q|bpm|clave|composer|c|by)\s*[:=]\s*(.*)$/i);
       if (hm && line.indexOf('|') < 0) {
