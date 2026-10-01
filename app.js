@@ -1,7 +1,8 @@
 /* ===== Latin Fake Book — app UI, playback scheduler, library, import/backup ===== */
 (function () {
   'use strict';
-  var C = window.LFCore, H = window.LFChords, E = window.LFEngine, A = window.LFAudio, ST = window.LFStaff;
+  var C = window.LFCore, H = window.LFChords, E = window.LFEngine, A = window.LFAudio, ST = window.LFStaff, TM = window.LFTiming;
+  var clock = TM.Clock(function () { return A.ctx; }), ticker = null, probe = null;
   var $ = function (id) { return document.getElementById(id); };
   var LS = {
     get: function (k, d) { try { var v = localStorage.getItem('lfb.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -22,7 +23,7 @@
 
   var S = {
     song: null, base: null, tl: null, style: 'bossa', tempo: 120, transpose: 0, clave: '3-2',
-    instr: LS.get('instr', 'C'), countIn: LS.get('countIn', 1), loop: LS.get('loop', false), view: LS.get('view', 'lead'),
+    instr: LS.get('instr', 'C'), countIn: LS.get('countIn', 1), loop: LS.get('loop', false), view: LS.get('view', 'lead'), roll: LS.get('roll', null),
     voice: LS.get('voice', 'flute'), comp: LS.get('comp', 'piano'), solo: false,
     range: null, rangeMode: false, rangeFirst: null,
     playing: false, startBar: 0, layout: null, cur: -1, curBar: -1, lastSys: -1
@@ -204,21 +205,97 @@
     var f = dispFifths(), mode = S.base.key.mode;
     var inst = S.instr === 'C' ? '' : ' · for ' + (S.instr === 'Bb' ? 'B♭' : 'E♭') + ' instruments';
     $('keyInfo').innerHTML = 'Key <b>' + esc(keyLabel(f, mode)) + '</b>' + inst;
+    forEach($('rollSeg').querySelectorAll('button'), function (b) { b.setAttribute('aria-pressed', b.dataset.v === rollAxis() ? 'true' : 'false'); });
     if (lead) renderStaff(); else renderGrid();
+  }
+  /* ---------- smooth roll: the music moves under a fixed playhead, locked to the audio clock ---------- */
+  function rollAxis() { return S.roll || (window.innerWidth >= 700 ? 'x' : 'y'); }
+  function rollHeight() {
+    var trH = $('transport').getBoundingClientRect().height, topH = document.querySelector('.topbar').getBoundingClientRect().height;
+    return Math.max(250, Math.min(620, window.innerHeight - topH - trH - 96));
+  }
+  function startSongT(bar) { return bar === 0 && S.tl.pickup > 0 ? 0 : S.tl.pickup + bar * S.tl.barQ; }
+  function setupRoll(host, strip, axis, knots) {
+    if (S.rollObj) S.rollObj.destroy();
+    host.style.height = axis === 'y' ? rollHeight() + 'px' : '';
+    var R = TM.Roll(host, strip, { axis: axis, at: axis === 'x' ? 1 / 3 : 0.3 });
+    if (axis === 'x') host.style.height = strip.getBoundingClientRect().height + 'px';
+    S.rollObj = R; S.knots = knots; S.posOf = TM.knotMap(knots); S.rollAxis = axis;
+    setRollLoop(); restRoll(false);
+  }
+  /* loops repeat seamlessly: the looped stretch [A, B) is shown again on either side, so wrapping is not a jump */
+  function setRollLoop() {
+    var R = S.rollObj; if (!R) return;
+    if (!S.loop) { S.posLoop = null; R.setLoop(null); return; }
+    var t0 = S.tl.pickup + firstBar() * S.tl.barQ, t1 = S.tl.pickup + (endBar() + 1) * S.tl.barQ, K = S.knots, A0, B0;
+    if (S.rollAxis === 'x') { A0 = S.posOf(t0); B0 = S.posOf(t1); }
+    else { // rows: start of the row holding the first bar, end of the row holding the last
+      A0 = K[0][1]; B0 = K[K.length - 1][1];
+      K.forEach(function (k) { if (k[0] <= t0 + 1e-6) A0 = k[1]; });
+      for (var i = K.length - 1; i >= 0; i--) if (K[i][0] >= t1 - 1e-6) B0 = K[i][1];
+    }
+    var lk = [[t0, A0]]; K.forEach(function (k) { if (k[0] > t0 + 1e-6 && k[0] < t1 - 1e-6) lk.push([k[0], Math.max(A0, Math.min(B0, k[1]))]); }); lk.push([t1, B0]);
+    S.posLoop = TM.knotMap(lk); S.loopT = [t0, t1];
+    R.setLoop(A0, B0);
+  }
+  function restRoll(ease) {
+    var R = S.rollObj; if (!R) return;
+    R.each(function (el) { el.classList.toggle('ease', !!ease); });
+    R.set(rollPos(startSongT(S.startBar || 0)));
+    if (ease) setTimeout(function () { R.each(function (el) { el.classList.remove('ease'); }); }, 320);
+  }
+  function rollPos(songT) {
+    if (S.posLoop && songT >= S.loopT[0] - 1e-6 && songT <= S.loopT[1] + 1e-6) return S.posLoop(songT);
+    return S.posOf(songT);
+  }
+  // when stopped, the music can be dragged or scrolled by hand; a tap still picks a bar or note
+  function wireRoll(host, onTap) {
+    var drag = null, moved = false;
+    host.onwheel = function (e) { if (S.playing || !S.rollObj) return; var d = S.rollAxis === 'x' ? (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) : e.deltaY; if (!d) return; e.preventDefault(); nudgeRoll(d); };
+    host.onpointerdown = function (e) { if (S.playing || !S.rollObj || e.button) return; drag = { x: e.clientX, y: e.clientY, p: S.rollObj.pos }; moved = false; };
+    host.onpointermove = function (e) { if (!drag) return; var d = S.rollAxis === 'x' ? drag.x - e.clientX : drag.y - e.clientY; if (Math.abs(d) > 6) moved = true; if (moved) { S.rollObj.set(clampRoll(drag.p + d)); try { host.setPointerCapture(e.pointerId); } catch (x) {} } };
+    host.onpointerup = host.onpointercancel = function () { drag = null; };
+    host.onclick = function (e) { if (moved) { moved = false; return; } onTap(e); };
+  }
+  function clampRoll(p) { var K = S.knots; return Math.max(K[0][1] - 40, Math.min(K[K.length - 1][1], p)); }
+  function nudgeRoll(d) { S.rollObj.set(clampRoll(S.rollObj.pos + d)); }
+  /* the melody as it is performed (repeats written out), so the roll never has to jump back */
+  function unrolledMelody() {
+    var r = S.base.melody, ev = S.base.events, seen = {}, barAfter = {}, notes = [], els = [];
+    r.elements.forEach(function (e) { if (e.type === 'bar' && e.afterNote !== undefined && e.afterNote >= 0) barAfter[e.afterNote] = e; });
+    ev.forEach(function (e, j) {
+      var src = r.notes[e.n], occ = (seen[e.n] = (seen[e.n] || 0) + 1), ly = src.lyrics || [];
+      notes.push(Object.assign({}, src, { i: j, start: e.start, line: 0, lyrics: ly.length ? [ly[occ - 1] || ly[0]] : ly }));
+      var b = barAfter[e.n];
+      if (b) els.push({ type: 'bar', kind: j === ev.length - 1 ? b.kind : (b.kind === 'double' ? 'double' : 'single'), repEnd: false, repStart: false, afterNote: j });
+    });
+    return Object.assign({}, r, { notes: notes, elements: els, verseCount: r.verseCount ? 1 : 0 });
   }
   function renderStaff() {
     var r = S.base.melody; if (!r) return;
-    var disp = C.displayNotes(r, dispSemis());
-    // chord symbol shown at the first note (or rest) that sounds when each chord starts
-    var chords = {}, ev = S.base.events, ce = S.base.chordEvents, k = 0;
-    ce.forEach(function (c) {
-      var best = null;
-      for (var i = 0; i < ev.length; i++) { if (ev[i].start <= c.t + 1e-6 && c.t < ev[i].start + ev[i].dur - 1e-6) { best = ev[i]; break; } }
-      if (!best) return;
-      var n = best.n; if (chords[n] && chords[n] !== dispChord(c.sym)) chords[n] += ' ' + dispChord(c.sym); else chords[n] = dispChord(c.sym);
+    var ev = S.base.events, d0 = C.displayNotes(r, dispSemis()), u = unrolledMelody();
+    var disp = Object.assign({}, d0, { notes: ev.map(function (e) { return d0.notes[e.n]; }) });
+    // chord symbol shown at the note (or rest) that sounds when each chord starts
+    var chords = {};
+    S.base.chordEvents.forEach(function (c) {
+      for (var j = 0; j < ev.length; j++) if (ev[j].start <= c.t + 1e-6 && c.t < ev[j].start + ev[j].dur - 1e-6) { var nm = dispChord(c.sym); chords[j] = chords[j] && chords[j] !== nm ? chords[j] + ' ' + nm : nm; break; }
     });
-    // a repeated section shows the same chords once: keep only the first time each source note is seen
-    S.layout = ST.render($('staff'), { res: r, disp: disp, verse: 0, chords: chords, onTap: function (i) { var e = S.base.events.filter(function (x) { return x.n === i; })[0]; if (e) seekTo(Math.max(0, Math.floor((e.start - S.base.pickup + 1e-6) / S.base.barQ))); } });
+    var host = $('staff'), axis = rollAxis();
+    if (S.rollObj) { S.rollObj.destroy(); S.rollObj = null; }
+    host.innerHTML = ''; var strip = document.createElement('div'); strip.className = 'strip'; host.appendChild(strip);
+    var L = S.layout = ST.render(strip, { res: u, disp: disp, verse: 0, chords: chords, strip: axis === 'x', width: host.clientWidth || 800 });
+    var knots = [], total = S.base.pickup + S.base.nb * S.base.barQ;
+    if (axis === 'x') {
+      ev.forEach(function (e, j) { if (L.notes[j]) knots.push([e.start, L.notes[j].x]); });
+      knots.push([Math.max(total, knots.length ? knots[knots.length - 1][0] + 0.01 : 0.01), L.sysEnd[0]]);
+    } else {
+      var seenSys = {};
+      ev.forEach(function (e, j) { var nI = L.notes[j]; if (nI && !seenSys[nI.sys]) { seenSys[nI.sys] = 1; knots.push([e.start, L.sysTop[nI.sys]]); } });
+      knots.push([total, L.sysTop[L.sysTop.length - 1] + L.sysH]);
+      knots[0][0] = Math.min(knots[0][0], 0);
+    }
+    setupRoll(host, strip, axis, knots);
+    wireRoll(host, function (e) { var g = e.target.closest('[data-i]'); if (!g) return; var x = ev[+g.getAttribute('data-i')]; if (x) seekTo(Math.max(0, Math.floor((x.start - S.base.pickup + 1e-6) / S.base.barQ))); });
     S.cur = -1; S.lastSys = -1;
   }
   function renderGrid() {
@@ -232,12 +309,27 @@
       names.forEach(function (n) { html += '<span class="ch' + (names.length > 2 || n.length > 6 ? ' small' : '') + (sim ? ' sim' : '') + '">' + esc(n) + '</span>'; });
       html += '</div>';
     });
-    g.innerHTML = html;
-    g.className = 'grid' + (b.beatsPerBar === 3 && false ? ' c3' : '');
-    forEach(g.querySelectorAll('.bar'), function (el) {
-      el.onclick = function () { barTap(+el.dataset.k); };
-      el.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); barTap(+el.dataset.k); } };
-    });
+    var axis = rollAxis();
+    if (S.rollObj) { S.rollObj.destroy(); S.rollObj = null; }
+    g.className = 'grid-host';
+    g.innerHTML = '<div class="grid' + (axis === 'x' ? ' strip-x' : '') + '" style="--bw:' + Math.round(b.barQ * (window.innerWidth < 560 ? 36 : 44)) + 'px">' + html + '</div>';
+    var strip = g.firstChild, bars = strip.querySelectorAll('.bar'), knots = [], total = b.pickup + b.nb * b.barQ;
+    var sr = strip.getBoundingClientRect(), box = Array.prototype.map.call(bars, function (el) { var r = el.getBoundingClientRect(); return { x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height }; });
+    if (axis === 'x') {
+      var gapX = box.length > 1 ? box[1].x - box[0].x - box[0].w : 8, x0 = box.length ? box[0].x : 0, per = box.length ? box[0].w + gapX : 160;
+      if (b.pickup) knots.push([0, x0 - b.pickup / b.barQ * per]);
+      box.forEach(function (r, k) { knots.push([b.pickup + k * b.barQ, r.x]); });
+      knots.push([total, box.length ? box[box.length - 1].x + per : per]);
+    } else {
+      var lastTop = -1e9, rowH = 0;
+      box.forEach(function (r, k) { if (Math.abs(r.y - lastTop) > 2) { lastTop = r.y; knots.push([b.pickup + k * b.barQ, r.y - 6]); } rowH = r.h; });
+      knots.push([total, lastTop + rowH + 2]);
+      if (b.pickup) knots[0][0] = 0;
+    }
+    if (!knots.length) knots = [[0, 0], [1, 1]];
+    setupRoll(g, strip, axis, knots);
+    wireRoll(g, function (e) { var el = e.target.closest('.bar[data-k]'); if (el) barTap(+el.dataset.k); });
+    g.onkeydown = function (e) { var el = e.target.closest && e.target.closest('.bar[data-k]'); if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); barTap(+el.dataset.k); } };
     $('pickupNote').hidden = !b.pickup;
     if (b.pickup) $('pickupNote').textContent = 'The melody starts with a short pickup before bar 1.';
     updateRangeUI();
@@ -353,7 +445,8 @@
   /* =================== PLAYBACK =================== */
   function spq() { return 60 / (S.tempo * S.tl.beatQ); } // seconds per quarter note (tempo counts the song's beat)
   function pbTime(pb) { return P.anchorTime + (pb - P.anchorBeat) * spq(); }
-  function curPb() { return P.anchorBeat + (A.now() - A.latency() - P.anchorTime) / spq(); }
+  // the beat being heard right now (audio clock, output latency compensated) - drives everything you see
+  function curPb(perf) { return P.anchorBeat + (clock.heard(perf) - P.anchorTime) / spq(); }
   function endBar() { return S.range ? S.range.b : S.tl.nb - 1; }
   function firstBar() { return S.range ? S.range.a : 0; }
   function warmUp() {
@@ -372,7 +465,8 @@
     if (S.voice === 'flute') n.push('flute'); else if (S.voice === 'vibes') n.push('vibes');
     var bs = E.STYLES[S.style] && E.STYLES[S.style].bib;
     if (S.comp === 'guitar' || (bs && bs.parts.guitar && !bs.parts.piano)) n.push('guitar');
-    if (S.base && percOn()) n.push('perc');
+    // percussion samples are loaded whenever the style has percussion, so unmuting it mid-song is instant
+    if (S.base && PERC_IDS.some(function (id) { return E.styleParts(S.style, S.base.triple)[id]; })) n.push('perc');
     return n;
   }
   var loadingP = null;
@@ -391,12 +485,14 @@
       });
     loadingP = p; return p;
   }
-  function play(fromBar) {
+  function play(fromBar, resumed) {
     try { A.ensure(); } catch (e) { toast(e.message); return; }
+    // Safari resumes audio asynchronously: start the clock only once it is really running
+    if (A.state !== 'running' && !resumed) { S.waiting = true; setPlayIcon(true); A.resume().then(function () { if (!S.waiting) return; S.waiting = false; play(fromBar, true); }); return; }
     var need = neededSets().filter(function (id) { return !A.ready(id) && A.SETS[id]; });
     if (need.length && !S.waiting) {
       S.waiting = true; $('nowState').textContent = 'Loading instruments…'; setPlayIcon(true);
-      loadSamples().then(function () { if (!S.waiting) return; S.waiting = false; play(fromBar); });
+      loadSamples().then(function () { if (!S.waiting) return; S.waiting = false; play(fromBar, resumed); });
       return;
     }
     S.waiting = false;
@@ -415,13 +511,15 @@
       P.segs.push({ kind: 'pick', start: 0, len: tl.pickup }); P.pbEnd = tl.pickup;
     }
     if (pickupNotes) queuePickup(P.pbEnd - tl.pickup);
-    P.anchorTime = A.now() + 0.12; P.anchorBeat = 0;
+    P.anchorTime = A.now() + 0.12; P.anchorBeat = 0; P.stats = { n: 0, shifts: 0, shifted: 0 }; P.startT = startSongT(start);
     S.playing = true; setPlayIcon(); $('nowState').textContent = S.countIn ? 'Count-in…' : 'Playing';
-    clearInterval(P.timer); P.timer = setInterval(tick, 25); tick();
+    clock.reset(); setRollLoop(); showMusic();
+    if (!ticker) ticker = TM.Ticker(tick, 25);
+    ticker.start();
     cancelAnimationFrame(P.raf); P.raf = requestAnimationFrame(frame);
   }
   function queuePickup(at) {
-    S.tl.events.forEach(function (e) { if (e.start < S.tl.pickup - 1e-6 && e.midi != null && e.attack !== false) P.queue.push({ pb: at + e.start, kind: 'mel', midi: e.midi, dur: e.sound || e.dur, n: e.n }); });
+    S.tl.events.forEach(function (e, j) { if (e.start < S.tl.pickup - 1e-6 && e.midi != null && e.attack !== false) P.queue.push(melItem(at + e.start, e, j, e.start)); });
   }
   function appendBar() {
     var tl = S.tl, k = P.nextBar;
@@ -436,26 +534,38 @@
     } else evs = E.generateBar(tl, S.style, k, { clave: S.clave, ending: ending, state: P.gen });
     evs.forEach(function (ev) { P.queue.push({ pb: seg.start + ev.t, kind: 'back', ev: ev }); });
     var b0 = tl.pickup + k * tl.barQ, b1 = b0 + tl.barQ;
-    tl.events.forEach(function (e) {
+    tl.events.forEach(function (e, j) {
       if (e.midi == null || e.attack === false) return;
-      if (e.start >= b0 - 1e-6 && e.start < b1 - 1e-6) P.queue.push({ pb: seg.start + e.start - b0, kind: 'mel', midi: e.midi, dur: e.sound || e.dur, n: e.n });
+      if (e.start >= b0 - 1e-6 && e.start < b1 - 1e-6) P.queue.push(melItem(seg.start + e.start - b0, e, j, e.start - b0));
     });
     // when looping back to the top of a song with a pickup, play the pickup notes at the end of the last bar
     if (S.loop && k === endBar() && firstBar() === 0 && tl.pickup > 0) queuePickup(seg.start + tl.barQ - tl.pickup);
     P.pbEnd += tl.barQ; P.nextBar = k + 1;
     P.queue.sort(function (a, b) { return a.pb - b.pb; });
   }
+  /* melody note with a little phrasing: stronger on the downbeat, lighter off the beat, long notes a touch fuller */
+  function melItem(pb, e, j, posInBar) {
+    var bq = S.tl.beatQ || 1, on = Math.abs(posInBar / bq - Math.round(posInBar / bq)) < 1e-6, h = ((j + 1) * 2654435761) >>> 0;
+    var vel = 0.8 * (posInBar < 1e-6 ? 1.07 : on ? 1 : 0.92) * ((e.sound || e.dur) >= 2 ? 1.04 : 1) * (0.96 + (h % 1000) / 12500);
+    return { pb: pb, kind: 'mel', midi: e.midi, dur: e.sound || e.dur, n: e.n, vel: Math.min(1, vel), dt: (((h >>> 10) % 1000) / 1000 - 0.5) * 0.004 };
+  }
+  /* lookahead scheduler: every 25 ms (from a worker) schedule what falls in the next 160 ms on the audio clock.
+     Hidden windows get a longer window. If the page was starved (a long task, a throttled timer), the whole band is
+     moved later together - notes are never squeezed onto "now", which is what made parts drift apart. */
+  var AHEAD = 0.16, AHEAD_HIDDEN = 1.2;
   function tick() {
     if (!S.playing) return;
-    var now = A.now(), horizon = now + 0.3, s = spq();
-    while (!P.done && pbTime(P.pbEnd) < horizon + S.tl.barQ * s * 0.5) appendBar();
-    while (P.queue.length && pbTime(P.queue[0].pb) < horizon) {
-      var q = P.queue.shift(), t = Math.max(now + 0.005, pbTime(q.pb));
-      if (q.kind === 'click') A.click(t, q.accent);
-      else if (q.kind === 'mel') A.melody(q.midi, t, Math.max(0.06, q.dur * s * 0.96 - 0.02), 0.82, S.voice);
-      else playBack(q.ev, t, s);
-    }
+    var now = A.now(), s = spq(), horizon = now + (document.hidden ? AHEAD_HIDDEN : AHEAD);
+    while (!P.done && pbTime(P.pbEnd) < horizon + S.tl.barQ * s) appendBar();
+    var h = P.queue[0];
+    if (h && pbTime(h.pb) < now + 0.02) { var sh = now + 0.1 - pbTime(h.pb); P.anchorTime += sh; P.stats.shifts++; P.stats.shifted += sh; }
+    while (P.queue.length && pbTime(P.queue[0].pb) < horizon) { var q = P.queue.shift(); dispatch(q, pbTime(q.pb), s); P.stats.n++; }
     if (P.done && !P.queue.length && now > pbTime(P.pbEnd) + 0.3) finished();
+  }
+  function dispatch(q, t, s) {
+    if (q.kind === 'click') A.click(t, q.accent);
+    else if (q.kind === 'mel') A.melody(q.midi, t + (q.dt || 0), Math.max(0.06, q.dur * s * 0.96 - 0.02), q.vel || 0.82, S.voice);
+    else playBack(q.ev, t + (q.ev.dt || 0), s);
   }
   function playBack(ev, t, s) {
     if (PERC_IDS.indexOf(ev.part) >= 0 && !partLevel(ev.part)) return; // muted percussion: nothing to play
@@ -468,22 +578,22 @@
     else if (ev.sound) A.perc(ev.sound, ev.part, t, ev.vel);
   }
   function finished() { stop(); $('nowState').textContent = 'Finished'; }
-  function frame() {
+  function frame(perf) {
     if (!S.playing) return;
-    var pb = curPb(), seg = null;
+    var pb = curPb(perf), seg = null;
     for (var i = P.segs.length - 1; i >= 0; i--) if (P.segs[i].start <= pb + 1e-9) { seg = P.segs[i]; break; }
-    var badge = $('countBadge');
+    var badge = $('countBadge'), songT = P.startT, inBar = false;
     if (seg && seg.kind === 'count' && pb < seg.start + seg.len) {
       var bq = S.tl.beatQ, n = Math.floor((pb - seg.start) / bq) % seg.n + 1;
       badge.textContent = n; badge.classList.add('show');
       $('nowState').textContent = 'Count-in… ' + n;
-      if (S.tl.pickup && P.nextBar === 0) {}
     } else badge.classList.remove('show');
     if (seg && seg.kind === 'bar') {
-      var songT = S.tl.pickup + seg.bar * S.tl.barQ + Math.min(seg.len - 1e-6, pb - seg.start);
+      songT = S.tl.pickup + seg.bar * S.tl.barQ + Math.max(0, Math.min(seg.len - 1e-6, pb - seg.start)); inBar = true;
       showPos(seg.bar, songT);
       $('nowState').textContent = 'Bar ' + (seg.bar + 1) + ' of ' + S.tl.nb + (S.range ? ' · looping ' + (S.range.a + 1) + '–' + (S.range.b + 1) : S.loop ? ' · repeat on' : '');
-    } else if (seg && seg.kind !== 'count') showPos(-1, pb - seg.start);
+    } else if (seg && seg.kind === 'pick') { songT = Math.max(0, pb - seg.start); showPos(-1, songT); }
+    if (S.rollObj) { var p = rollPos(songT); S.rollObj.set(p); if (probe) probe.frame(perf || performance.now(), p); }
     P.raf = requestAnimationFrame(frame);
   }
   function showPos(bar, songT) {
@@ -492,13 +602,12 @@
       S.curBar = bar;
       var g = $('grid'); if (!$('chartView').hidden) {
         forEach(g.querySelectorAll('.bar.on'), function (e) { e.classList.remove('on'); });
-        var el = g.querySelector('.bar[data-k="' + bar + '"]');
-        if (el) { el.classList.add('on'); keepVisible(el); }
+        forEach(g.querySelectorAll('.bar[data-k="' + bar + '"]'), function (el) { el.classList.add('on'); });
       }
     }
     if (S.layout && !$('staff').hidden) {
       var evs = S.tl.events, found = -1;
-      for (var k = 0; k < evs.length; k++) if (evs[k].start <= songT + 1e-6 && songT < evs[k].start + evs[k].dur) { found = evs[k].n; break; }
+      for (var k = 0; k < evs.length; k++) if (evs[k].start <= songT + 1e-6 && songT < evs[k].start + evs[k].dur) { found = k; break; }
       if (found !== S.cur) setCurrent(found);
     }
   }
@@ -507,21 +616,22 @@
     if (r.top < topH + 8 || r.bottom > window.innerHeight - trH - 8) window.scrollBy({ top: r.top - topH - (window.innerHeight - topH - trH) * 0.3, behavior: 'smooth' });
   }
   function setCurrent(i) {
-    var L = S.layout, svg = $('staff').querySelector('svg'); if (!L || !svg) return;
-    forEach(svg.querySelectorAll('.st-note.on, .lyr.on, .chordsym.on'), function (e) { e.classList.remove('on'); });
+    var L = S.layout, host = $('staff'); if (!L) return;
+    forEach(host.querySelectorAll('.st-note.on, .lyr.on, .chordsym.on'), function (e) { e.classList.remove('on'); });
     S.cur = i;
     if (i < 0 || !L.notes[i]) { L.hl.classList.remove('show'); return; }
-    var info = L.notes[i], g = svg.querySelector('.st-note[data-i="' + i + '"]'); if (g) g.classList.add('on');
+    var info = L.notes[i];
+    forEach(host.querySelectorAll('.st-note[data-i="' + i + '"]'), function (g) { g.classList.add('on'); });
     if (info.lyr) info.lyr.classList.add('on');
-    // light up the chord in force
     for (var j = i; j >= 0; j--) if (L.notes[j] && L.notes[j].ch) { L.notes[j].ch.classList.add('on'); break; }
+    if (S.rollAxis === 'x') { L.hl.classList.remove('show'); return; } // the playhead line is the cursor
     L.hl.style.transform = 'translate(' + (info.x - 1.4 * L.sp) + 'px,' + (L.sysTop[info.sys] + 2.6 * L.sp) + 'px)'; L.hl.classList.add('show');
-    if (info.sys !== S.lastSys) {
-      S.lastSys = info.sys;
-      var rect = svg.getBoundingClientRect(), sc = rect.width / svg.viewBox.baseVal.width, top = rect.top + L.sysTop[info.sys] * sc, bottom = top + L.sysH * sc;
-      var trH = $('transport').getBoundingClientRect().height, topH = document.querySelector('.topbar').getBoundingClientRect().height;
-      if (top < topH + 8 || bottom > window.innerHeight - trH - 8) window.scrollBy({ top: top - topH - (window.innerHeight - topH - trH) * 0.25, behavior: 'smooth' });
-    }
+  }
+  /* make sure the music is on screen when playback starts (no page scrolling while it plays) */
+  function showMusic() {
+    var host = S.rollObj && S.rollObj.host; if (!host) return;
+    var r = host.getBoundingClientRect(), trH = $('transport').getBoundingClientRect().height, topH = document.querySelector('.topbar').getBoundingClientRect().height;
+    if (r.top < topH || r.bottom > window.innerHeight - trH) window.scrollBy({ top: r.top - topH - 12, behavior: 'smooth' });
   }
   function pause() {
     if (!S.playing) return;
@@ -530,12 +640,12 @@
     S.startBar = seg && seg.kind === 'bar' ? seg.bar : firstBar();
     halt(); $('nowState').textContent = 'Paused at bar ' + (S.startBar + 1);
   }
-  function halt() { S.waiting = false; S.playing = false; clearInterval(P.timer); cancelAnimationFrame(P.raf); A.silence(); P.queue = []; $('countBadge').classList.remove('show'); setPlayIcon(); }
+  function halt() { S.waiting = false; S.playing = false; if (ticker) ticker.stop(); cancelAnimationFrame(P.raf); A.silence(); P.queue = []; $('countBadge').classList.remove('show'); setPlayIcon(); }
   function stop(quiet) {
     halt(); S.startBar = firstBar(); S.curBar = -1;
     if (S.layout) setCurrent(-1);
     forEach($('grid').querySelectorAll('.bar.on'), function (e) { e.classList.remove('on'); });
-    $('progressBar').style.width = '0%';
+    $('progressBar').style.width = '0%'; restRoll(true);
     if (!quiet) $('nowState').textContent = 'Ready';
   }
   function toggle() { if (S.waiting) { halt(); $('nowState').textContent = 'Ready'; return; } if (S.playing) pause(); else play(); }
@@ -544,7 +654,7 @@
     if (S.range && (bar < S.range.a || bar > S.range.b)) { S.range = null; updateRangeUI(); if (!$('chartView').hidden) renderGrid(); }
     S.startBar = bar;
     if (S.playing) { halt(); var ci = S.countIn; S.countIn = 0; play(bar); S.countIn = ci; }
-    else { $('nowState').textContent = 'Starts at bar ' + (bar + 1) + ' — press Play'; showPos(bar, S.tl.pickup + bar * S.tl.barQ); }
+    else { $('nowState').textContent = 'Starts at bar ' + (bar + 1) + ' — press Play'; showPos(bar, S.tl.pickup + bar * S.tl.barQ); restRoll(true); }
   }
   function setPlayIcon(busy) {
     $('playBtn').classList.toggle('busy', !!busy);
@@ -562,7 +672,7 @@
     S.transpose = t; rebuild(); renderView(); updateControls(); savePrefs();
     if (was) { var ci = S.countIn; S.countIn = 0; play(S.startBar); S.countIn = ci; }
   }
-  function setLoop(on, quiet) { S.loop = on; LS.set('loop', on); $('loopBtn').setAttribute('aria-pressed', on ? 'true' : 'false'); if (!quiet) toast(on ? (S.range ? 'Repeating bars ' + (S.range.a + 1) + '–' + (S.range.b + 1) : 'Repeat the whole song: on') : 'Repeat off'); }
+  function setLoop(on, quiet) { S.loop = on; LS.set('loop', on); setRollLoop(); $('loopBtn').setAttribute('aria-pressed', on ? 'true' : 'false'); if (!quiet) toast(on ? (S.range ? 'Repeating bars ' + (S.range.a + 1) + '–' + (S.range.b + 1) : 'Repeat the whole song: on') : 'Repeat off'); }
   function updateControls() {
     var t = $('tempo'); t.value = S.tempo; fill(t);
     var st = E.STYLES[S.style], unit = S.tl.beatQ === 1.5 ? 'dotted-quarter' : S.tl.beatQ === 2 ? 'half-note' : 'beats';
@@ -849,6 +959,9 @@
     var vol = $('volume'), sv = LS.get('volume', 85); vol.value = sv; A.setVolume(sv / 100); $('volOut').textContent = sv + '%'; fill(vol);
     vol.oninput = function () { A.setVolume(this.value / 100); $('volOut').textContent = this.value + '%'; fill(this); LS.set('volume', +this.value); };
     forEach($('viewSeg').querySelectorAll('button'), function (b) { b.onclick = function () { S.view = b.dataset.v; LS.set('view', S.view); renderView(); }; });
+    forEach($('rollSeg').querySelectorAll('button'), function (b) { b.onclick = function () { var was = S.playing; if (was) pause(); S.roll = b.dataset.v; LS.set('roll', S.roll); renderView(); if (was) { var ci = S.countIn; S.countIn = 0; play(S.startBar); S.countIn = ci; } }; });
+    TM.unlock(function () { try { A.ensure(); A.resume(); } catch (e) {} });
+    A.onState(function (st) { if (S.playing && st !== 'running') { pause(); toast('The sound was interrupted. Press Play to carry on.'); } });
     $('rangeBtn').onclick = function () { S.rangeMode = !S.rangeMode; S.rangeFirst = null; renderGrid(); };
     $('rangeClear').onclick = function () { S.range = null; S.rangeMode = false; renderGrid(); toast('Playing the whole song'); };
     $('presetPB').onclick = function () { PERC_IDS.forEach(function (id) { mix[id].mute = true; }); mix.piano.mute = false; mix.bass.mute = false; S.solo = false; applyMix(); renderMixer(); toast('Piano and bass only'); };
@@ -888,6 +1001,7 @@
     loadSong(params.get('song') || LS.get('song', builtIn[0] && builtIn[0].id));
   }
   window.LFApp = { state: S, P: P, mix: mix, play: play, pause: pause, stop: stop, loadSong: loadSong, setStyle: setStyle, setTempo: setTempo, setTranspose: setTranspose, toggleMelody: toggleMelody,
+    _appendBar: appendBar, _dispatch: dispatch, _playBack: playBack, _pbTime: pbTime, _spq: spq, clock: clock, probe: function (on) { probe = on ? TM.FrameProbe() : null; return probe; }, roll: function () { return S.rollObj; },
     importFiles: importFiles, importBib: importBib, backup: backup, bibReady: function () { return bibReadyP; }, loadSamples: loadSamples, neededSets: neededSets, partLevel: partLevel, audio: A, seekTo: seekTo, allSongs: allSongs };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

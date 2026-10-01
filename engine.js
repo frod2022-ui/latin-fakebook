@@ -285,6 +285,72 @@
       });
     });
     out.sort(function (a, b) { return a.t - b.t; });
+    if (opt.feel === false) return out;
+    return feel(out, { sid: sid, st: st, pat: pat, k: k, tl: tl, c0: ((gStart + claveShift) % cyc + cyc) % cyc, cyc: cyc, state: state, lastBar: lastBar, seed: opt.seed });
+  }
+
+  /* ---------- feel: accents, dynamics, small human timing, variation and fills ----------
+     Deterministic (seeded by bar and part) so the same bar always plays the same way and tests are repeatable.
+     Each event gets vel (0..1) and dt (seconds; small timing offset, consistent tendency per part). */
+  var FEEL = { piano: [1.5, 2.2], bass: [-1, 1.6], clave: [0, 1], congas: [-0.5, 2.2], bongos: [1, 2.2], shaker: [1.5, 1.8], cowbell: [-1, 1.3], timbales: [0, 1.8], guiro: [2, 2.2], rim: [0, 1.3], drums: [-1, 1.3], melody: [0, 1.5] };
+  function rng(seed) { var x = seed >>> 0 || 1; return function () { x ^= x << 13; x >>>= 0; x ^= x >> 17; x ^= x << 5; x >>>= 0; return x / 4294967296; }; }
+  function gauss(r) { return (r() + r() + r() - 1.5) * 1.15; } // about unit variance, bounded
+  function partSeed(p) { var h = 7; for (var i = 0; i < p.length; i++) h = (h * 31 + p.charCodeAt(i)) >>> 0; return h; }
+  function humanMs(part, r) { var f = FEEL[part] || [0, 1.5]; return Math.max(-8, Math.min(8, f[0] + gauss(r) * f[1])) / 1000; }
+  function feel(out, o) {
+    var tl = o.tl, barQ = tl.barQ, beatQ = tl.beatQ || 1, k = o.k, st = o.st || {}, pat = o.pat || {};
+    var R = rng(((o.seed || 1) * 2654435761 + (k + 1) * 40503) >>> 0);
+    // clave strokes in this bar (cycle positions) - clave styles lean on them
+    var clv = {};
+    if (st.clave && pat.perc && pat.perc.clave) { var cs = pat.perc.clave, step = o.cyc / cs.length; for (var i = 0; i < cs.length; i++) if (cs[i] !== '.') clv[Math.round(i * step * 4)] = 1; }
+    var phraseEnd8 = k % 8 === 7 && k + 1 < tl.nb && !o.lastBar, phraseEnd4 = k % 4 === 3 && k + 1 < tl.nb && !o.lastBar;
+    var swell = [0.97, 1, 1.02, 0.99][k % 4];
+    // variation: let the piano breathe now and then (drop one weak off-beat hit), never on chord arrivals
+    if (!o.lastBar && R() < 0.22) {
+      var weak = out.filter(function (e) { return e.part === 'piano' && !e.raw && Math.abs(e.t / 0.5 - Math.round(e.t / 0.5)) < 1e-6 && Math.abs(e.t - Math.round(e.t)) > 0.1 && e.t > 0.6; });
+      if (weak.length > 1) { var drop = weak[Math.floor(R() * weak.length)]; out = out.filter(function (e) { return e !== drop; }); }
+    }
+    // fills at phrase ends: a short drum figure on the last beat leading into the next phrase
+    if (phraseEnd8 && pat.perc) {
+      var last = barQ - beatQ, fillPart = pat.perc.timbales ? 'timbales' : pat.perc.congas ? 'congas' : pat.perc.drums ? 'drums' : pat.perc.bongos ? 'bongos' : null;
+      if (fillPart) {
+        out = out.filter(function (e) { return !(e.part === fillPart && e.t >= last - 1e-6); });
+        var snd = { timbales: ['timbalHi', 'timbalHi', 'timbalLo', 'timbalLo'], congas: ['congaOpen', 'congaSlap', 'congaOpen', 'tumbaOpen'], drums: ['tamboraRim', 'kick', 'tamboraRim', 'kick'], bongos: ['bongoHi', 'bongoHi', 'bongoLo', 'bongoLo'] }[fillPart];
+        if (fillPart === 'drums' && pat.perc.drums.indexOf('t') < 0) snd = ['kick', 'kick', 'kick', 'kick'];
+        for (var f = 0; f < 4; f++) out.push({ part: fillPart, t: last + f * beatQ / 4, dur: 0.2, vel: 0.62 + f * 0.1, sound: snd[f], fill: 1 });
+      }
+    }
+    // bass approach note at 4-bar phrase ends when the harmony moves (a chromatic step into the next root)
+    if (phraseEnd4 && H) {
+      var bs = out.filter(function (e) { return e.part === 'bass' && !e.raw; }), lb = bs[bs.length - 1];
+      var nx = chordAt(tl, tl.pickup + (k + 1) * barQ + 0.01), here = chordAt(tl, tl.pickup + k * barQ + barQ - 0.6);
+      if (lb && nx && here && !nx.c.nc && nx.sym !== here.sym && lb.t + lb.dur > barQ - 0.5 - 1e-6 && lb.t < barQ - 0.6) {
+        var tgt = H.bassNote(nx.c, 'R', 29, 50, lb.midi[0]), ap = tgt + (lb.midi[0] > tgt ? 1 : -1);
+        lb.dur = Math.max(0.3, barQ - 0.5 - lb.t - 0.03);
+        out.push({ part: 'bass', t: barQ - 0.5, dur: 0.46, vel: 0.78, midi: [ap], approach: 1 });
+      }
+    }
+    var byPart = {};
+    out.forEach(function (e) { (byPart[e.part] = byPart[e.part] || []).push(e); });
+    // legato bass: notes run into the next one unless the pattern leaves a deliberate rest
+    (byPart.bass || []).forEach(function (e, i, a) { if (e.raw) return; var nx2 = a[i + 1]; if (nx2) { var gap = nx2.t - (e.t + e.dur); if (gap > 0 && gap < 0.3) e.dur = nx2.t - e.t - 0.02; } });
+    Object.keys(byPart).forEach(function (part) {
+      var r = rng(((o.seed || 1) * 977 + (k + 1) * 7919 + partSeed(part)) >>> 0);
+      byPart[part].forEach(function (e) {
+        if (e.raw) { e.dt = 0; return; } // Band-in-a-Box patterns keep their own velocities and microtiming
+        e.dt = humanMs(part, r); // Band-in-a-Box patterns keep their own velocities and microtiming
+        var pos = e.t, cpos = Math.round(((o.c0 + pos) % o.cyc) * 4), onBeat = Math.abs(pos / beatQ - Math.round(pos / beatQ)) < 1e-6;
+        var a = pos < 1e-6 ? 1.08 : onBeat ? (Math.abs(pos - barQ / 2) < 1e-6 ? 1.03 : 1) : Math.abs(pos * 2 - Math.round(pos * 2)) < 1e-6 ? 0.93 : 0.86;
+        if (part === 'piano' || part === 'bass') a = Math.sqrt(a); // patterns already shape these
+        if (clv[cpos] && (part === 'piano' || part === 'bass' || part === 'cowbell' || part === 'congas' || part === 'bongos')) a *= 1.08;
+        if (o.sid === 'bossa' && (part === 'rim' || part === 'drums') && onBeat && Math.round(pos / beatQ) % 2 === 1) a *= 0.78; // lighter backbeat
+        if (o.sid === 'bossa' && part === 'shaker') a *= onBeat ? 1.05 : 0.82;
+        if ((o.sid === 'salsa' || o.sid === 'mambo') && part === 'bass' && Math.abs(pos % 4 - 3) < 1e-6) a *= 1.06; // the anticipated bass of the tumbao
+        if (part === 'shaker' || part === 'guiro') a *= 0.9 + r() * 0.2;
+        e.vel = Math.max(0.12, Math.min(1, e.vel * a * swell * (0.94 + r() * 0.12)));
+      });
+    });
+    out.sort(function (a, b) { return a.t - b.t; });
     return out;
   }
 
@@ -296,7 +362,7 @@
   }
 
   var API = { PARTS: PARTS, STYLES: STYLES, STYLE_ORDER: STYLE_ORDER, styleId: styleId, styleParts: styleParts, buildSong: buildSong, chordAt: chordAt,
-    generateBar: generateBar, countIn: countIn, nextChordAfter: nextChordAfter };
+    generateBar: generateBar, feel: feel, countIn: countIn, nextChordAfter: nextChordAfter };
   root.LFEngine = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })(typeof window !== 'undefined' ? window : globalThis);

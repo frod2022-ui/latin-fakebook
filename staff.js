@@ -19,7 +19,7 @@
   var SHARP_STEPS = [38, 35, 39, 36, 33, 37, 34], FLAT_STEPS = [34, 37, 33, 36, 32, 35, 31];
   function render(host, o) {
     var r = o.res, CH = o.chords || {}, hasCh = Object.keys(CH).length > 0;
-    var W = Math.max(300, host.clientWidth || 800);
+    var W = Math.max(300, o.width || host.clientWidth || 800), strip = !!o.strip;
     var sp = W < 420 ? 9.6 : W < 520 ? 10.5 : W < 800 ? 12 : 13.5;           // staff space in px
     var lyrPx = Math.round(sp * (W < 520 ? 1.75 : 1.65)), chPx = Math.round(sp * (W < 520 ? 1.7 : 1.6));
     var disp = o.disp;
@@ -35,7 +35,8 @@
       var lw = ly && ly.text ? textW(ly.text + (ly.hyph ? ' -' : ''), lyrPx) + 0.6 * sp : 0;
       var base = (W < 520 ? 1.7 + Math.min(4, n.dur) * 0.95 : 2.3 + Math.min(4, n.dur) * 1.35) * sp + (d.showAcc !== undefined ? 1.2 * sp : 0) + (g.dots ? 0.6 * sp : 0);
       var cw = CH[i] ? chordW(CH[i], chPx) + 0.9 * sp : 0;
-      items.push({ type: 'note', i: i, w: Math.max(base, lw, cw, 2.6 * sp), lw: lw, g: g });
+      // strip (rolling) layout: space proportional to time so the music moves past the playhead at an even speed
+      items.push({ type: 'note', i: i, w: Math.max(base, lw, cw, 2.6 * sp, strip ? n.dur * (o.ppb || 6.2 * sp) : 0), lw: lw, g: g });
       if (barAfter[i]) items.push({ type: 'bar', el: barAfter[i], w: (barAfter[i].kind === 'single' && !barAfter[i].repEnd && !barAfter[i].repStart ? 1.4 : 2.2) * sp });
     });
     // break into systems: prefer phrase (source line) ends, then bars
@@ -65,6 +66,7 @@
       if (bar.length) { var bw2 = wOf(bar); if (cur.length && curW + bw2 > usable - headW(systems.length === 0)) { systems.push(cur); cur = []; curW = 0; } cur = cur.concat(bar); curW += bw2; }
     });
     if (cur.length) systems.push(cur);
+    if (strip) { systems = [items]; W = 4 + headW(true) + wOf(items) + 6 + 2 * sp; }
     // vertical metrics
     var topPad = (hasCh ? 6.6 : 4.2) * sp, staffH = 4 * sp, belowStaff = 3.6 * sp, lyrH = r.verseCount ? lyrPx * 1.55 : 0, gap = 1.6 * sp;
     var sysH = topPad + staffH + belowStaff + lyrH + gap;
@@ -74,7 +76,7 @@
     svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Music notation with words');
     function el(name, attrs, parent) { var e = document.createElementNS(SVGNS, name); for (var k in attrs) e.setAttribute(k, attrs[k]); (parent || svg).appendChild(e); return e; }
     var hl = el('rect', { class: 'st-hl', x: 0, y: 0, width: 2.8 * sp, height: 1, rx: sp * 0.9 });
-    var layout = { notes: {}, sysTop: [], sp: sp, hl: hl, sysH: sysH };
+    var layout = { notes: {}, sysTop: [], sp: sp, hl: hl, sysH: sysH, W: W, H: H, sysStartX: 0 };
     systems.forEach(function (sys, si) {
       var y0 = si * sysH + topPad, x = 4;
       var first = si === 0;
@@ -85,7 +87,9 @@
       var scale = natural > 0 ? avail / natural : 1;
       if (isLast && scale > 1.35) scale = 1.35; // don't over-stretch a short last line
       if (scale > 2.2) scale = 2.2;
+      if (strip) scale = 1;
       var endX = x + head + natural * scale;
+      (layout.sysEnd = layout.sysEnd || []).push(endX); (layout.sysStart = layout.sysStart || []).push(x + head);
       for (var l = 0; l < 5; l++) el('line', { class: 'st-line', x1: x, x2: endX, y1: y0 + l * sp, y2: y0 + l * sp });
       el('line', { class: 'st-bar', x1: x, x2: x, y1: y0, y2: y0 + staffH });
       drawClef(el, x + 0.5 * sp, y0 + 3 * sp, sp);

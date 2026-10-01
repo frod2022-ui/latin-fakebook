@@ -9,12 +9,23 @@
   var SEND = { melody: 0.24, piano: 0.2, bass: 0.04, click: 0, drums: 0.08 };
   function freq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 
+  var stateFns = [];
+  /* tests render through an OfflineAudioContext with the same graph */
+  function useContext(c) { var AC0 = root.AudioContext; ctx = null; root.AudioContext = function () { return c; }; try { ensure(); } finally { root.AudioContext = AC0; } cache = {}; return ctx; }
+  function resume() { // resolves once the clock is really running (Safari resumes asynchronously)
+    if (!ctx) ensure();
+    if (ctx.state === 'running' || !ctx.resume) return Promise.resolve();
+    var p; try { p = ctx.resume(); } catch (e) { p = null; }
+    return Promise.race([p || Promise.resolve(), new Promise(function (r) { setTimeout(r, 1500); })]);
+  }
   function ensure() {
-    if (ctx) { if (ctx.state !== 'running') { try { ctx.resume(); } catch (e) {} } return ctx; }
+    if (ctx) { if (ctx.state !== 'running' && ctx.resume && !(ctx instanceof (root.OfflineAudioContext || Object))) { try { ctx.resume(); } catch (e) {} } return ctx; }
     var AC = root.AudioContext || root.webkitAudioContext;
     if (!AC) throw new Error('This browser cannot play sound (no Web Audio).');
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
     ctx = new AC({ latencyHint: 'interactive' }); sr = ctx.sampleRate;
+    // iOS reports 'interrupted' (calls, Siri, other apps); Safari may suspend: let the app pause cleanly
+    ctx.onstatechange = function () { stateFns.forEach(function (f) { try { f(ctx.state); } catch (e) {} }); };
     comp = ctx.createDynamicsCompressor(); comp.threshold.value = -12; comp.knee.value = 10; comp.ratio.value = 3; comp.attack.value = 0.003; comp.release.value = 0.2;
     master = ctx.createGain(); master.gain.value = settings.volume * settings.volume * 1.5;
     master.connect(comp); comp.connect(ctx.destination);
@@ -227,6 +238,14 @@
     var th = pk * 0.04; for (i = 0; i < n; i++) if (Math.abs(d[i]) > th) break;
     return Math.max(0, i / buf.sampleRate - 0.002);
   }
+  /* how long after the trimmed start the attack is heard (reaches 40% of its peak). Slow attacks (flute, bowed or
+     blown sounds, some bass samples) are started that much early so every part is heard on the beat together. */
+  function leadOf(buf, off) {
+    var d = buf.getChannelData(0), s0 = Math.floor(off * buf.sampleRate), n = Math.min(d.length, s0 + Math.floor(buf.sampleRate * 0.3)), pk = 0, i;
+    for (i = s0; i < n; i++) if (Math.abs(d[i]) > pk) pk = Math.abs(d[i]);
+    var th = pk * 0.4; for (i = s0; i < n; i++) if (Math.abs(d[i]) >= th) break;
+    return Math.min(0.08, Math.max(0, (i - s0) / buf.sampleRate));
+  }
   /* load sample sets; onProg(done, total) */
   function load(ids, onProg) {
     var files = [], waits = [];
@@ -243,7 +262,7 @@
     function worker() {
       var f = q.shift(); if (!f) return Promise.resolve();
       return fetch(f.url).then(function (r) { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }).then(decode).then(function (buf) {
-        smp[f.key] = { buf: buf, off: onsetOf(buf) };
+        var off = onsetOf(buf); smp[f.key] = { buf: buf, off: off, lead: leadOf(buf, off) };
       }).catch(function () { failed[f.set] = true; }).then(function () { done++; if (onProg) onProg(done, total); return worker(); });
     }
     var ws = []; for (var k = 0; k < 6; k++) ws.push(worker());
@@ -261,7 +280,6 @@
     return s ? { s: s, rate: Math.pow(2, (m - best) / 12) } : null;
   }
   function tuneRatio() { return settings.tune / 440; }
-  function hum(t) { return t + (Math.random() - 0.5) * 0.008; } // a few ms of human timing
   /* play one sample: dur = held length (0 = let it ring), release = seconds of fade after note-off */
   function playSample(z, part, t, dur, gain, release, pitched, loop) {
     var src = ctx.createBufferSource(), g = ctx.createGain(), buf = z.s.buf, rate = z.rate * (pitched ? tuneRatio() : 1);
@@ -269,11 +287,12 @@
     var avail = (buf.duration - z.s.off) / rate;
     if (loop && dur > avail - 0.4 && buf.duration > 3) { src.loop = true; src.loopStart = Math.min(buf.duration - 1, z.s.off + 1.4); src.loopEnd = buf.duration - 0.45; avail = 1e9; }
     src.connect(g); g.connect(parts[part].gain);
-    g.gain.setValueAtTime(gain, t);
+    var t0 = Math.max(0, t - (z.s.lead || 0) / rate); // start early by the attack time so the note is heard at t
+    g.gain.setValueAtTime(gain, t0);
     var stopAt;
     if (dur && dur < avail) { var end = t + dur; g.gain.setValueAtTime(gain, end); g.gain.setTargetAtTime(0, end, release / 4); stopAt = end + release * 1.6; }
     else stopAt = t + Math.min(avail, 30);
-    src.start(t, z.s.off); src.stop(stopAt + 0.02);
+    src.start(t0, z.s.off); src.stop(stopAt + 0.02);
     track([src, g], stopAt);
   }
   function playBuf(b, part, t, dur, vel, release, rateMul) {
@@ -291,31 +310,31 @@
   /* piano: a chord (array of midi) - lowest note slightly first, real velocity layers, natural damper release */
   function piano(midis, t, dur, vel, part, opt) {
     if (!ctx) return; part = part || 'piano'; opt = opt || {};
-    var n = midis.length, t0 = hum(t);
+    var n = midis.length, t0 = t - (opt.spread || 0) * (n - 1) / 2; // a slight roll, centred on the beat
     if (ready('piano')) {
       var lay = pianoLayer(vel), adj = Math.pow(vel / PIANO_REF[lay], 0.8);
       midis.forEach(function (m, k) {
         var z = nearest('piano', m, lay); if (!z) return;
         var g = 1.5 * adj * (k === n - 1 && n > 2 ? 1.1 : 1) * (n > 3 ? 0.6 : n > 1 ? 0.75 : 1) * (0.94 + Math.random() * 0.1);
-        playSample(z, part, t0 + k * (opt.spread || 0.004) + Math.random() * 0.003, dur, g, opt.release || (dur < 0.3 ? 0.18 : 0.32), true);
+        playSample(z, part, t0 + k * (opt.spread || 0), dur, g, opt.release || (dur < 0.3 ? 0.18 : 0.32), true);
       });
       return;
     }
     var hard = vel > 0.78;
     midis.forEach(function (m, k) {
       var v = vel * (0.5 + 0.5 * vel) * (k === n - 1 && n > 2 ? 1.08 : 1) * (n > 3 ? 0.62 : n > 1 ? 0.78 : 1) * (0.94 + Math.random() * 0.1);
-      playBuf(pianoBuf(m, hard), part, t0 + k * (opt.spread || 0.004) + Math.random() * 0.003, dur, v, opt.release || (dur < 0.3 ? 0.05 : 0.09));
+      playBuf(pianoBuf(m, hard), part, t0 + k * (opt.spread || 0), dur, v, opt.release || (dur < 0.3 ? 0.05 : 0.09));
     });
   }
   function guitar(midis, t, dur, vel, part) {
-    if (!ctx) return; var t0 = hum(t);
+    if (!ctx) return; var t0 = t - 0.006 * (midis.length - 1) / 2; // strum centred on the beat
     midis.slice().sort(function (a, b) { return a - b; }).forEach(function (m, k) {
       if (ready('guitar')) { var z = nearest('guitar', m); if (z) playSample(z, part || 'piano', t0 + k * 0.012, dur + 0.05, vel * 0.9 * (0.92 + Math.random() * 0.12), 0.25, true); return; }
       playBuf(guitarBuf(m), part || 'piano', t0 + k * 0.011, dur + 0.05, vel * 0.7 * (0.92 + Math.random() * 0.12), 0.09);
     });
   }
   function bass(m, t, dur, vel) {
-    if (!ctx) return; var t0 = hum(t);
+    if (!ctx) return; var t0 = t;
     if (ready('bass')) { var z = nearest('bass', m); if (z) { playSample(z, 'bass', t0, dur, 1.25 * vel * (0.92 + Math.random() * 0.1), 0.12, true); return; } }
     playBuf(bassBuf(m), 'bass', t0, dur, vel * (0.92 + Math.random() * 0.1), 0.06);
   }
@@ -332,7 +351,7 @@
   var rr = {};
   function perc(name, part, t, vel) {
     if (!ctx) return;
-    var mp = PMAP[name], t0 = t + (Math.random() - 0.5) * 0.006;
+    var mp = PMAP[name], t0 = t;
     if (mp && ready('perc')) {
       var k = (rr[name] = ((rr[name] || 0) + 1) % mp[0].length), s = smp['perc:' + mp[0][k]];
       if (s) { playSample({ s: s, rate: mp[1] }, part, t0, 0, mp[2] * vel * (0.88 + Math.random() * 0.16), 0.05, false); return; }
@@ -388,6 +407,7 @@
     step();
   }
   root.LFAudio = {
+    useContext: useContext, resume: resume, onState: function (f) { stateFns.push(f); }, get state() { return ctx ? ctx.state : 'none'; }, get ctx() { return ctx; },
     ensure: ensure, piano: piano, guitar: guitar, bass: bass, perc: perc, click: click, melody: melody, silence: silence, setLevel: setLevel, warm: warm,
     pianoBuf: function (m, h) { return ctx && pianoBuf(m, h); }, bassBuf: function (m) { return ctx && bassBuf(m); }, percBuf: function (n) { return ctx && percBuf(n); },
     vibesBuf: function (m) { return ctx && vibesBuf(m); }, guitarBuf: function (m) { return ctx && guitarBuf(m); },
