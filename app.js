@@ -446,7 +446,13 @@
   function spq() { return 60 / (S.tempo * S.tl.beatQ); } // seconds per quarter note (tempo counts the song's beat)
   function pbTime(pb) { return P.anchorTime + (pb - P.anchorBeat) * spq(); }
   // the beat being heard right now (audio clock, output latency compensated) - drives everything you see
-  function curPb(perf) { return P.anchorBeat + (clock.heard(perf) - P.anchorTime) / spq(); }
+  // Sound, cursor and highlight all come from this one clock. Tempo changes keep segments, so notes already
+  // scheduled at the old tempo are shown at the old tempo. syncMs: the user's offset (+ = show later).
+  function heardTime(perf) { return clock.heard(perf) - (+LS.get('syncMs', 0) || 0) / 1000; }
+  var fdt = 1 / 60; // refresh interval; a frame drawn now is on screen from the next refresh for one interval
+  function shownTime(perf) { return heardTime(perf) + 1.5 * fdt; }
+  function segAt(h) { var g = P.tsegs && P.tsegs.length ? P.tsegs : [{ at: P.anchorTime, ab: P.anchorBeat, spq: spq() }], s = g[0]; for (var i = 1; i < g.length; i++) if (h >= g[i].at) s = g[i]; return s; }
+  function curPb(perf, h) { h = h != null ? h : heardTime(perf); var s = segAt(h); return s.ab + (h - s.at) / s.spq; }
   function endBar() { return S.range ? S.range.b : S.tl.nb - 1; }
   function firstBar() { return S.range ? S.range.a : 0; }
   function warmUp() {
@@ -511,7 +517,7 @@
       P.segs.push({ kind: 'pick', start: 0, len: tl.pickup }); P.pbEnd = tl.pickup;
     }
     if (pickupNotes) queuePickup(P.pbEnd - tl.pickup);
-    P.anchorTime = A.now() + 0.12; P.anchorBeat = 0; P.stats = { n: 0, shifts: 0, shifted: 0 }; P.startT = startSongT(start);
+    P.anchorTime = A.now() + 0.12; P.anchorBeat = 0; P.tsegs = [{ at: P.anchorTime, ab: 0, spq: spq() }]; P.horizon = 0; P.stats = { n: 0, shifts: 0, shifted: 0 }; P.startT = startSongT(start);
     S.playing = true; setPlayIcon(); $('nowState').textContent = S.countIn ? 'Count-in…' : 'Playing';
     clock.reset(); setRollLoop(); showMusic();
     if (!ticker) ticker = TM.Ticker(tick, 25);
@@ -547,7 +553,7 @@
   function melItem(pb, e, j, posInBar) {
     var bq = S.tl.beatQ || 1, on = Math.abs(posInBar / bq - Math.round(posInBar / bq)) < 1e-6, h = ((j + 1) * 2654435761) >>> 0;
     var vel = 0.8 * (posInBar < 1e-6 ? 1.07 : on ? 1 : 0.92) * ((e.sound || e.dur) >= 2 ? 1.04 : 1) * (0.96 + (h % 1000) / 12500);
-    return { pb: pb, kind: 'mel', midi: e.midi, dur: e.sound || e.dur, n: e.n, vel: Math.min(1, vel), dt: (((h >>> 10) % 1000) / 1000 - 0.5) * 0.004 };
+    return { pb: pb, kind: 'mel', midi: e.midi, dur: e.sound || e.dur, n: e.n, j: j, vel: Math.min(1, vel), dt: (((h >>> 10) % 1000) / 1000 - 0.5) * 0.004 };
   }
   /* lookahead scheduler: every 25 ms (from a worker) schedule what falls in the next 160 ms on the audio clock.
      Hidden windows get a longer window. If the page was starved (a long task, a throttled timer), the whole band is
@@ -558,13 +564,14 @@
     var now = A.now(), s = spq(), horizon = now + (document.hidden ? AHEAD_HIDDEN : AHEAD);
     while (!P.done && pbTime(P.pbEnd) < horizon + S.tl.barQ * s) appendBar();
     var h = P.queue[0];
-    if (h && pbTime(h.pb) < now + 0.02) { var sh = now + 0.1 - pbTime(h.pb); P.anchorTime += sh; P.stats.shifts++; P.stats.shifted += sh; }
+    if (h && pbTime(h.pb) < now + 0.02) { var sh = now + 0.1 - pbTime(h.pb); P.anchorTime += sh; if (P.tsegs) P.tsegs[P.tsegs.length - 1].at += sh; P.stats.shifts++; P.stats.shifted += sh; }
+    P.horizon = horizon;
     while (P.queue.length && pbTime(P.queue[0].pb) < horizon) { var q = P.queue.shift(); dispatch(q, pbTime(q.pb), s); P.stats.n++; }
     if (P.done && !P.queue.length && now > pbTime(P.pbEnd) + 0.3) finished();
   }
   function dispatch(q, t, s) {
     if (q.kind === 'click') A.click(t, q.accent);
-    else if (q.kind === 'mel') A.melody(q.midi, t + (q.dt || 0), Math.max(0.06, q.dur * s * 0.96 - 0.02), q.vel || 0.82, S.voice);
+    else if (q.kind === 'mel') { if (P.onMel) P.onMel(q.j, t + (q.dt || 0)); A.melody(q.midi, t + (q.dt || 0), Math.max(0.06, q.dur * s * 0.96 - 0.02), q.vel || 0.82, S.voice); }
     else playBack(q.ev, t + (q.ev.dt || 0), s);
   }
   function playBack(ev, t, s) {
@@ -578,9 +585,19 @@
     else if (ev.sound) A.perc(ev.sound, ev.part, t, ev.vel);
   }
   function finished() { stop(); $('nowState').textContent = 'Finished'; }
+  function songTAt(pb) {
+    var seg = null; for (var i = P.segs.length - 1; i >= 0; i--) if (P.segs[i].start <= pb + 1e-9) { seg = P.segs[i]; break; }
+    if (seg && seg.kind === 'bar') return S.tl.pickup + seg.bar * S.tl.barQ + Math.max(0, Math.min(seg.len - 1e-6, pb - seg.start));
+    if (seg && seg.kind === 'pick') return Math.max(0, pb - seg.start);
+    return null;
+  }
   function frame(perf) {
     if (!S.playing) return;
-    var pb = curPb(perf), seg = null;
+    if (P.lastPerf) { var fd = (perf - P.lastPerf) / 1000; if (fd > 0.003 && fd < 0.05) fdt += (fd - fdt) * 0.1; }
+    P.lastPerf = perf;
+    var sh = shownTime(perf), pb = curPb(perf, sh), seg = null;
+    // the highlight shows on the frame during whose time on screen the note starts sounding
+    var hlT = songTAt(pb + 0.5 * fdt / segAt(sh).spq);
     for (var i = P.segs.length - 1; i >= 0; i--) if (P.segs[i].start <= pb + 1e-9) { seg = P.segs[i]; break; }
     var badge = $('countBadge'), songT = P.startT, inBar = false;
     if (seg && seg.kind === 'count' && pb < seg.start + seg.len) {
@@ -590,10 +607,11 @@
     } else badge.classList.remove('show');
     if (seg && seg.kind === 'bar') {
       songT = S.tl.pickup + seg.bar * S.tl.barQ + Math.max(0, Math.min(seg.len - 1e-6, pb - seg.start)); inBar = true;
-      showPos(seg.bar, songT);
+      showPos(seg.bar, hlT != null ? hlT : songT);
       $('nowState').textContent = 'Bar ' + (seg.bar + 1) + ' of ' + S.tl.nb + (S.range ? ' · looping ' + (S.range.a + 1) + '–' + (S.range.b + 1) : S.loop ? ' · repeat on' : '');
-    } else if (seg && seg.kind === 'pick') { songT = Math.max(0, pb - seg.start); showPos(-1, songT); }
+    } else if (seg && seg.kind === 'pick') { songT = Math.max(0, pb - seg.start); showPos(-1, hlT != null ? hlT : songT); }
     if (S.rollObj) { var p = rollPos(songT); S.rollObj.set(p); if (probe) probe.frame(perf || performance.now(), p); }
+    if (P.syncLog) P.syncLog.push([sh, S.rollObj ? S.rollObj.pos : null, S.cur, songT]);
     P.raf = requestAnimationFrame(frame);
   }
   function showPos(bar, songT) {
@@ -663,7 +681,11 @@
   }
   function setTempo(b) {
     b = Math.max(40, Math.min(240, Math.round(b)));
-    if (S.playing) { var pb = P.anchorBeat + (A.now() - P.anchorTime) / spq(); P.anchorBeat = pb; P.anchorTime = A.now(); }
+    if (S.playing && b !== S.tempo) {
+      // the new tempo starts where nothing is scheduled yet (the end of the last look-ahead window)
+      var at = Math.max(A.now(), P.horizon || 0), pb = P.anchorBeat + (at - P.anchorTime) / spq();
+      S.tempo = b; P.anchorBeat = pb; P.anchorTime = at; (P.tsegs = P.tsegs || []).push({ at: at, ab: pb, spq: spq() });
+    }
     S.tempo = b; updateControls(); savePrefs();
   }
   function setTranspose(t) {
@@ -936,6 +958,7 @@
   function toast(t) { var e = $('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(function () { e.classList.remove('show'); }, 3200); }
   function segWire(id, fn) { forEach($(id).querySelectorAll('button'), function (b) { b.onclick = function () { fn(b.dataset.v); updateControls(); }; }); }
   function init() {
+    wireSync();
     $('playBtn').onclick = toggle;
     $('stopBtn').onclick = function () { stop(); };
     $('melBtn').onclick = toggleMelody;
@@ -999,6 +1022,13 @@
     setTimeout(loadSamples, 50);
     var params = new URLSearchParams(location.search);
     loadSong(params.get('song') || LS.get('song', builtIn[0] && builtIn[0].id));
+  }
+  function wireSync() { // sync offset (+ shows the cursor later), saved on this device
+    var r = $('sync'); if (!r) return;
+    function show(v) { v = Math.max(-300, Math.min(300, Math.round(v / 5) * 5)); r.value = v; LS.set('syncMs', v); $('syncOut').textContent = (v > 0 ? '+' : '') + v + ' ms'; }
+    show(+LS.get('syncMs', 0) || 0);
+    r.oninput = function () { show(+r.value); }; r.ondblclick = function () { show(0); };
+    $('syncDown').onclick = function () { show(+r.value - 10); }; $('syncUp').onclick = function () { show(+r.value + 10); };
   }
   window.LFApp = { state: S, P: P, mix: mix, play: play, pause: pause, stop: stop, loadSong: loadSong, setStyle: setStyle, setTempo: setTempo, setTranspose: setTranspose, toggleMelody: toggleMelody,
     _appendBar: appendBar, _dispatch: dispatch, _playBack: playBack, _pbTime: pbTime, _spq: spq, clock: clock, probe: function (on) { probe = on ? TM.FrameProbe() : null; return probe; }, roll: function () { return S.rollObj; },

@@ -90,6 +90,14 @@
       <div id="mixRows"></div>
     </section>
 
+    <details class="card" id="syncBox">
+      <summary><span><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg></span>Sound and cursor sync</span></summary>
+      <div class="dbody">
+        <p>The cursor and highlight follow the sound you hear. If they run ahead of it (for example with Bluetooth speakers), move the slider to the right; if they lag behind, to the left.</p>
+        <div class="row" style="align-items:center;gap:10px"><button class="pill-btn" id="syncDown" aria-label="Cursor 10 milliseconds earlier">−</button><input type="range" id="sync" min="-300" max="300" step="5" value="0" aria-label="Sync offset in milliseconds" style="flex:1"><button class="pill-btn" id="syncUp" aria-label="Cursor 10 milliseconds later">+</button><output id="syncOut" style="min-width:64px;text-align:right">0 ms</output></div>
+      </div>
+    </details>
+
     <details class="card" id="aboutBox">
       <summary><span><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r=".7" fill="currentColor"/></svg></span>About this song</span></summary>
       <div class="dbody"><p id="aboutText"></p><div class="row" id="songActions"></div></div>

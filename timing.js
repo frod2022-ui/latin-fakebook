@@ -28,14 +28,32 @@
     // graphDelay: fixed delay inside our own audio graph (a DynamicsCompressorNode looks ahead 6 ms)
     var gd = graphDelay == null ? 0.006 : graphDelay;
     var lastPerf = 0, lastT = 0, have = false;
+    var env = null, envPerf = 0; // upper envelope of currentTime - performance time (currentTime advances in chunks)
+    function ctNow(ctx, perf) {
+      var pn = performance.now(), d = ctx.currentTime - pn / 1000;
+      if (env === null || Math.abs(d - env) > 0.25) env = d; // first reading or a discontinuity (resume, device change)
+      else env = Math.max(d, env - 0.002 * Math.max(0, pn - envPerf) / 1000); // freshest reading; follows clock drift
+      envPerf = pn;
+      return perf / 1000 + env;
+    }
     function raw(ctx, perf) {
+      var ct = ctNow(ctx, perf);
       if (ctx.getOutputTimestamp) {
         var ts = ctx.getOutputTimestamp();
-        // contextTime is what is reaching the speakers at performanceTime
-        if (ts && ts.performanceTime > 0 && ts.contextTime > 0 && Math.abs(ts.contextTime - ctx.currentTime) < 1) return ts.contextTime + (perf - ts.performanceTime) / 1000 - gd;
+        // contextTime is what is reaching the speakers at performanceTime. Some engines (WebKit builds) report a
+        // performanceTime on another time base or at another rate, so use it only after it has been seen to advance
+        // at the real rate (1 s per s, checked every 250 ms) and while it agrees with currentTime.
+        if (ts && ts.performanceTime > 0 && ts.contextTime > 0) {
+          var e = ts.contextTime + (perf - ts.performanceTime) / 1000;
+          if (otsP0 === null || perf < otsP0) { otsP0 = perf; otsE0 = e; }
+          else if (perf - otsP0 >= 250) { var rate = (e - otsE0) / ((perf - otsP0) / 1000); otsGood = Math.abs(rate - 1) < 0.03; otsP0 = perf; otsE0 = e; }
+          if (otsGood && e <= ct + 0.02 && e >= ct - 0.5) { okOts = true; return e - gd; }
+        }
       }
-      return ctx.currentTime - (ctx.outputLatency || 0) - (ctx.baseLatency || 0) - gd;
+      okOts = false;
+      return ct - (ctx.outputLatency || 0) - (ctx.baseLatency || 0) - gd;
     }
+    var okOts = false, otsGood = false, otsP0 = null, otsE0 = 0;
     return {
       // audio-context time being heard now, steady for animation; perf = rAF timestamp (ms) if you have it
       heard: function (perf) {
@@ -51,7 +69,8 @@
         lastPerf = perf; lastT = t;
         return t;
       },
-      reset: function () { have = false; },
+      reset: function () { have = false; env = null; otsP0 = null; otsGood = false; },
+      get usesOutputTimestamp() { return okOts; },
       latency: function () { var ctx = getCtx(); if (!ctx) return 0; return Math.max(0, ctx.currentTime - raw(ctx, performance.now())); }
     };
   }
